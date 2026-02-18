@@ -369,21 +369,45 @@ def load_odd(config: dict) -> pd.DataFrame:
 # Merge
 # =========================================================================
 
+# ODD columns to merge into combined_df (keep it slim to avoid memory blow-up).
+# Storylines that need the full ODD (S6 Risk, S7 Campaigns) read ctx["odd_df"].
+_MERGE_COLS = [
+    "Acct Number",
+    "generation",
+    "balance_tier",
+    "tenure_years",
+    "Branch",
+    "Business?",
+    "Debit?",
+    "Avg Bal",
+    "Account Holder Age",
+]
+
+
 def merge_data(
     txn_df: pd.DataFrame, odd_df: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Left-join transaction data with ODD account-level data.
+    """Left-join transaction data with a slim subset of ODD columns.
+
+    Only essential ODD columns are merged to keep memory manageable.
+    Storylines needing full ODD data should read ``ctx["odd_df"]`` directly.
 
     Returns
     -------
-    combined_df : full merged DataFrame
+    combined_df : merged DataFrame (transactions + slim ODD columns)
     business_df : subset where Business? == 'Yes'
     personal_df : subset where Business? == 'No'
     """
     print("\n[merge] Merging transaction data with ODD...")
 
+    # Select only the columns that exist in this ODD file
+    merge_cols = [c for c in _MERGE_COLS if c in odd_df.columns]
+    odd_slim = odd_df[merge_cols].copy()
+    print(f"[merge] Merging {len(merge_cols)} ODD columns "
+          f"(of {len(odd_df.columns)} total) to keep memory low")
+
     combined_df = txn_df.merge(
-        odd_df,
+        odd_slim,
         left_on="primary_account_num",
         right_on="Acct Number",
         how="left",
@@ -397,9 +421,13 @@ def merge_data(
     print(f"  Matched to ODD     : {matched:,} ({match_rate:.1f}%)")
     print(f"  Unmatched          : {unmatched:,}")
 
-    # split by business flag
-    business_df = combined_df[combined_df["Business?"] == "Yes"].copy()
-    personal_df = combined_df[combined_df["Business?"] == "No"].copy()
+    # split by business flag (guard for missing column)
+    if "Business?" in combined_df.columns:
+        business_df = combined_df[combined_df["Business?"] == "Yes"].copy()
+        personal_df = combined_df[combined_df["Business?"] == "No"].copy()
+    else:
+        business_df = pd.DataFrame(columns=combined_df.columns)
+        personal_df = combined_df.copy()
 
     print(f"\n[merge] Account type split:")
     print(f"  Business transactions : {len(business_df):,} "
