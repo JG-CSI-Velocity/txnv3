@@ -895,8 +895,16 @@ def _response_by_age_tenure(odd):
 # =============================================================================
 
 def _add(sections, sheets, heading, df, fig, narr, sheet_name, **col_spec):
-    """Append a section+sheet pair only when data is present."""
+    """Append a section+sheet pair; show 'no data' message when empty."""
     if df.empty:
+        sections.append({
+            "heading": heading,
+            "narrative": (
+                f"No data available for this analysis. Required columns or "
+                f"matching records were not found in the ODD file."
+            ),
+            "figures": [], "tables": [],
+        })
         return
     sections.append({
         "heading": heading, "narrative": narr,

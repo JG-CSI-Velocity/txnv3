@@ -32,165 +32,194 @@ def run(ctx: dict) -> dict:
     sections = []
     sheets = []
 
+    def _safe(label, fn, *args, **kwargs):
+        """Call fn and return result; on error append a diagnostic section."""
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            sections.append({
+                "heading": label,
+                "narrative": f"Error in {label}: {type(e).__name__}: {e}",
+                "figures": [], "tables": [],
+            })
+            return None
+
     # --- KPI Summary ---
-    kpis = _build_kpis(df, odd)
-    sections.append({
-        "heading": "Key Performance Indicators",
-        "narrative": build_kpi_html(kpis),
-        "figures": [],
-        "tables": [],
-    })
+    kpis = _safe("KPI Summary", _build_kpis, df, odd)
+    if kpis is not None:
+        sections.append({
+            "heading": "Key Performance Indicators",
+            "narrative": build_kpi_html(kpis),
+            "figures": [],
+            "tables": [],
+        })
 
     # --- Monthly Summary ---
-    monthly_df, monthly_fig = _monthly_summary(df)
-    sections.append({
-        "heading": "Monthly Transaction Summary",
-        "narrative": _monthly_narrative(monthly_df),
-        "figures": [monthly_fig],
-        "tables": [("Monthly Summary", monthly_df.head(24))],
-    })
-    sheets.append({
-        "name": "S1 Monthly Summary",
-        "df": monthly_df,
-        "currency_cols": ["Total Spend", "Avg Transaction", "Median Transaction"],
-        "pct_cols": ["Spend Growth %", "Transaction Growth %"],
-        "number_cols": ["Accounts", "Transactions", "Unique Merchants"],
-    })
+    result = _safe("Monthly Transaction Summary", _monthly_summary, df)
+    if result is not None:
+        monthly_df, monthly_fig = result
+        sections.append({
+            "heading": "Monthly Transaction Summary",
+            "narrative": _monthly_narrative(monthly_df),
+            "figures": [monthly_fig],
+            "tables": [("Monthly Summary", monthly_df.head(24))],
+        })
+        sheets.append({
+            "name": "S1 Monthly Summary",
+            "df": monthly_df,
+            "currency_cols": ["Total Spend", "Avg Transaction", "Median Transaction"],
+            "pct_cols": ["Spend Growth %", "Transaction Growth %"],
+            "number_cols": ["Accounts", "Transactions", "Unique Merchants"],
+        })
 
     # --- Transaction Distribution ---
-    dist_df, dist_fig = _transaction_distribution(df)
-    sections.append({
-        "heading": "Transaction Distribution by Amount",
-        "narrative": _distribution_narrative(dist_df),
-        "figures": [dist_fig],
-        "tables": [("Distribution", dist_df)],
-    })
-    sheets.append({
-        "name": "S1 Transaction Dist",
-        "df": dist_df,
-        "currency_cols": ["Total Value"],
-        "pct_cols": ["Trans %", "Value %"],
-        "number_cols": ["Transactions"],
-    })
+    result = _safe("Transaction Distribution", _transaction_distribution, df)
+    if result is not None:
+        dist_df, dist_fig = result
+        sections.append({
+            "heading": "Transaction Distribution by Amount",
+            "narrative": _distribution_narrative(dist_df),
+            "figures": [dist_fig],
+            "tables": [("Distribution", dist_df)],
+        })
+        sheets.append({
+            "name": "S1 Transaction Dist",
+            "df": dist_df,
+            "currency_cols": ["Total Value"],
+            "pct_cols": ["Trans %", "Value %"],
+            "number_cols": ["Transactions"],
+        })
 
     # --- Monthly Distribution Variance ---
     if "year_month" in df.columns:
-        variance_df, variance_fig = _monthly_distribution_variance(df)
-        if variance_df is not None and not variance_df.empty:
-            sections.append({
-                "heading": "Monthly Transaction Distribution Variance",
-                "narrative": _variance_narrative(variance_df),
-                "figures": [variance_fig],
-                "tables": [("Monthly Bracket %", variance_df)],
-            })
-            sheets.append({
-                "name": "S1 Monthly Dist Var",
-                "df": variance_df,
-                "currency_cols": [],
-                "pct_cols": [c for c in variance_df.columns if c != "Month"],
-                "number_cols": [],
-            })
-
-            # --- Bracket Volatility Analysis ---
-            vol_df = _bracket_volatility(variance_df)
-            if vol_df is not None and not vol_df.empty:
+        result = _safe("Monthly Distribution Variance", _monthly_distribution_variance, df)
+        if result is not None:
+            variance_df, variance_fig = result
+            if variance_df is not None and not variance_df.empty:
                 sections.append({
-                    "heading": "Bracket Volatility Analysis",
-                    "narrative": _volatility_narrative(vol_df),
-                    "figures": [],
-                    "tables": [("Bracket Volatility", vol_df)],
+                    "heading": "Monthly Transaction Distribution Variance",
+                    "narrative": _variance_narrative(variance_df),
+                    "figures": [variance_fig],
+                    "tables": [("Monthly Bracket %", variance_df)],
                 })
                 sheets.append({
-                    "name": "S1 Bracket Volatil",
-                    "df": vol_df,
+                    "name": "S1 Monthly Dist Var",
+                    "df": variance_df,
                     "currency_cols": [],
-                    "pct_cols": ["Mean %", "Std Dev", "Min %", "Max %", "Range"],
+                    "pct_cols": [c for c in variance_df.columns if c != "Month"],
                     "number_cols": [],
                 })
 
+                # --- Bracket Volatility Analysis ---
+                vol_df = _bracket_volatility(variance_df)
+                if vol_df is not None and not vol_df.empty:
+                    sections.append({
+                        "heading": "Bracket Volatility Analysis",
+                        "narrative": _volatility_narrative(vol_df),
+                        "figures": [],
+                        "tables": [("Bracket Volatility", vol_df)],
+                    })
+                    sheets.append({
+                        "name": "S1 Bracket Volatil",
+                        "df": vol_df,
+                        "currency_cols": [],
+                        "pct_cols": ["Mean %", "Std Dev", "Min %", "Max %", "Range"],
+                        "number_cols": [],
+                    })
+
     # --- PIN vs Signature Mix ---
-    pin_sig_df, pin_sig_fig = _pin_sig_mix(df)
-    if pin_sig_df is not None:
-        sections.append({
-            "heading": "PIN vs Signature Transaction Mix",
-            "narrative": (
-                "PIN transactions are typically lower-margin but higher-volume. "
-                "Signature transactions generate higher interchange revenue."
-            ),
-            "figures": [pin_sig_fig],
-            "tables": [("PIN/Sig Mix", pin_sig_df)],
-        })
-        sheets.append({
-            "name": "S1 PIN Sig Mix",
-            "df": pin_sig_df,
-            "currency_cols": [],
-            "pct_cols": ["PIN %", "Sig %"],
-            "number_cols": ["PIN Count", "Sig Count"],
-        })
+    result = _safe("PIN vs Signature Mix", _pin_sig_mix, df)
+    if result is not None:
+        pin_sig_df, pin_sig_fig = result
+        if pin_sig_df is not None:
+            sections.append({
+                "heading": "PIN vs Signature Transaction Mix",
+                "narrative": (
+                    "PIN transactions are typically lower-margin but higher-volume. "
+                    "Signature transactions generate higher interchange revenue."
+                ),
+                "figures": [pin_sig_fig],
+                "tables": [("PIN/Sig Mix", pin_sig_df)],
+            })
+            sheets.append({
+                "name": "S1 PIN Sig Mix",
+                "df": pin_sig_df,
+                "currency_cols": [],
+                "pct_cols": ["PIN %", "Sig %"],
+                "number_cols": ["PIN Count", "Sig Count"],
+            })
 
     # --- Balance Distribution ---
     if odd is not None and "Avg Bal" in odd.columns:
-        bal_df, bal_fig = _balance_distribution(odd)
-        sections.append({
-            "heading": "Account Balance Distribution",
-            "narrative": _balance_narrative(bal_df),
-            "figures": [bal_fig],
-            "tables": [("Balance Tiers", bal_df)],
-        })
-        sheets.append({
-            "name": "S1 Balance Dist",
-            "df": bal_df,
-            "currency_cols": ["Avg Balance", "Total Balance"],
-            "pct_cols": ["% of Accounts"],
-            "number_cols": ["Accounts"],
-        })
+        result = _safe("Balance Distribution", _balance_distribution, odd)
+        if result is not None:
+            bal_df, bal_fig = result
+            sections.append({
+                "heading": "Account Balance Distribution",
+                "narrative": _balance_narrative(bal_df),
+                "figures": [bal_fig],
+                "tables": [("Balance Tiers", bal_df)],
+            })
+            sheets.append({
+                "name": "S1 Balance Dist",
+                "df": bal_df,
+                "currency_cols": ["Avg Balance", "Total Balance"],
+                "pct_cols": ["% of Accounts"],
+                "number_cols": ["Accounts"],
+            })
 
     # --- Account Activation ---
     if odd is not None and "Debit?" in odd.columns:
-        act_df, act_fig = _activation_analysis(odd)
-        sections.append({
-            "heading": "Debit Card Activation",
-            "narrative": _activation_narrative(act_df),
-            "figures": [act_fig],
-            "tables": [("Activation", act_df)],
-        })
-        sheets.append({
-            "name": "S1 Activation",
-            "df": act_df,
-            "currency_cols": [],
-            "pct_cols": ["% of Total"],
-            "number_cols": ["Accounts"],
-        })
+        result = _safe("Debit Card Activation", _activation_analysis, odd)
+        if result is not None:
+            act_df, act_fig = result
+            sections.append({
+                "heading": "Debit Card Activation",
+                "narrative": _activation_narrative(act_df),
+                "figures": [act_fig],
+                "tables": [("Activation", act_df)],
+            })
+            sheets.append({
+                "name": "S1 Activation",
+                "df": act_df,
+                "currency_cols": [],
+                "pct_cols": ["% of Total"],
+                "number_cols": ["Accounts"],
+            })
 
     # --- Overall Summary Statistics ---
-    summary_df = _summary_statistics(df, odd)
-    sections.append({
-        "heading": "Overall Summary Statistics",
-        "narrative": "Key portfolio-level scalar metrics.",
-        "figures": [],
-        "tables": [("Summary Statistics", summary_df)],
-    })
-    sheets.append({
-        "name": "S1 Summary Stats", "df": summary_df,
-        "currency_cols": [], "number_cols": ["Value"],
-    })
+    result = _safe("Summary Statistics", _summary_statistics, df, odd)
+    if result is not None:
+        summary_df = result
+        sections.append({
+            "heading": "Overall Summary Statistics",
+            "narrative": "Key portfolio-level scalar metrics.",
+            "figures": [],
+            "tables": [("Summary Statistics", summary_df)],
+        })
+        sheets.append({
+            "name": "S1 Summary Stats", "df": summary_df,
+            "currency_cols": [], "number_cols": ["Value"],
+        })
 
     # --- Card Present vs Card Not Present ---
     if "card_present" in df.columns:
-        cp_df, cp_fig = _card_present_analysis(df)
-        if cp_df is not None:
-            sections.append({
-                "heading": "Card Present vs Card Not Present",
-                "narrative": _cp_narrative(cp_df),
-                "figures": [cp_fig],
-                "tables": [("CP vs CNP", cp_df)],
-            })
-            sheets.append({
-                "name": "S1 CP vs CNP", "df": cp_df,
-                "currency_cols": ["Total Spend"],
-                "pct_cols": ["% of Transactions", "% of Spend"],
-                "number_cols": ["Transactions"],
-            })
+        result = _safe("Card Present Analysis", _card_present_analysis, df)
+        if result is not None:
+            cp_df, cp_fig = result
+            if cp_df is not None:
+                sections.append({
+                    "heading": "Card Present vs Card Not Present",
+                    "narrative": _cp_narrative(cp_df),
+                    "figures": [cp_fig],
+                    "tables": [("CP vs CNP", cp_df)],
+                })
+                sheets.append({
+                    "name": "S1 CP vs CNP", "df": cp_df,
+                    "currency_cols": ["Total Spend"],
+                    "pct_cols": ["% of Transactions", "% of Spend"],
+                    "number_cols": ["Transactions"],
+                })
 
     return {
         "title": "S1: Portfolio Health Dashboard",

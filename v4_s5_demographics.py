@@ -27,204 +27,238 @@ def run(ctx: dict) -> dict:
     sections = []
     sheets = []
 
+    def _safe(label, fn, *args, **kwargs):
+        """Call fn and return result; on error append a diagnostic section."""
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            sections.append({
+                "heading": label,
+                "narrative": f"Error in {label}: {type(e).__name__}: {e}",
+                "figures": [], "tables": [],
+            })
+            return None
+
     # --- 1. Generation Distribution ---
     if "generation" in odd.columns:
-        gen_dist, gen_spend, figs = _generation_distribution(odd, df)
-        sections.append({
-            "heading": "Generation Distribution",
-            "narrative": _generation_narrative(gen_dist, gen_spend),
-            "figures": figs,
-            "tables": [("Generation Distribution", gen_dist)],
-        })
-        sheets.append({
-            "name": "S5 Gen Distribution",
-            "df": gen_dist,
-            "currency_cols": [],
-            "pct_cols": ["% of Accounts"],
-            "number_cols": ["Accounts"],
-        })
-
-    # --- 2. Generation Spend Profiles ---
-    if "generation" in df.columns:
-        profile_df, profile_fig = _generation_spend_profiles(df)
-        sections.append({
-            "heading": "Generation Spend Profiles",
-            "narrative": _spend_profile_narrative(profile_df),
-            "figures": [profile_fig],
-            "tables": [("Generation Spend Profiles", profile_df)],
-        })
-        sheets.append({
-            "name": "S5 Gen Spend Profiles",
-            "df": profile_df,
-            "currency_cols": ["Total Spend", "Avg Transaction"],
-            "pct_cols": [],
-            "number_cols": ["Transactions", "Unique Merchants"],
-        })
-
-    # --- 3. Account Tenure Analysis ---
-    if "tenure_years" in odd.columns:
-        tenure_df, tenure_figs = _tenure_analysis(odd, df)
-        sections.append({
-            "heading": "Account Tenure Analysis",
-            "narrative": _tenure_narrative(tenure_df),
-            "figures": tenure_figs,
-            "tables": [("Tenure Buckets", tenure_df)],
-        })
-        sheets.append({
-            "name": "S5 Tenure Analysis",
-            "df": tenure_df,
-            "currency_cols": ["Avg Spend per Account"],
-            "pct_cols": ["% of Accounts"],
-            "number_cols": ["Accounts"],
-        })
-
-    # --- 4. Branch Performance Dashboard ---
-    if "Branch" in df.columns:
-        branch_df, branch_fig = _branch_performance(df, odd)
-        if branch_df is not None:
+        result = _safe("Generation Distribution", _generation_distribution, odd, df)
+        if result is not None:
+            gen_dist, gen_spend, figs = result
             sections.append({
-                "heading": "Branch Performance Dashboard",
-                "narrative": _branch_narrative(branch_df),
-                "figures": [branch_fig],
-                "tables": [("Top Branches", branch_df.head(TOP_BRANCHES))],
+                "heading": "Generation Distribution",
+                "narrative": _generation_narrative(gen_dist, gen_spend),
+                "figures": figs,
+                "tables": [("Generation Distribution", gen_dist)],
             })
             sheets.append({
-                "name": "S5 Branch Performance",
-                "df": branch_df,
-                "currency_cols": ["Total Spend", "Avg Spend/Acct", "Avg Balance"],
-                "pct_cols": [],
-                "number_cols": ["Accounts", "Transactions"],
-            })
-
-    # --- 5. Branch-Generation Heatmap ---
-    if "Branch" in df.columns and "generation" in df.columns:
-        hm_df, hm_fig = _branch_generation_heatmap(df)
-        if hm_df is not None:
-            sections.append({
-                "heading": "Branch-Generation Heatmap",
-                "narrative": (
-                    "Cross-tabulation of total spend by branch and generation. "
-                    "Darker cells indicate higher concentration of spend, revealing "
-                    "which branches serve which demographic segments."
-                ),
-                "figures": [hm_fig],
-                "tables": [("Branch x Generation Spend", hm_df.reset_index())],
-            })
-            sheets.append({
-                "name": "S5 Branch Gen Heatmap",
-                "df": hm_df.reset_index(),
-                "currency_cols": list(hm_df.columns),
-                "pct_cols": [],
-                "number_cols": [],
-            })
-
-    # --- 6. Age vs Spend Scatter ---
-    if "Account Holder Age" in df.columns:
-        scatter_df, scatter_fig = _age_spend_scatter(df)
-        if scatter_df is not None:
-            sections.append({
-                "heading": "Age vs Spend Analysis",
-                "narrative": _age_spend_narrative(scatter_df),
-                "figures": [scatter_fig],
-                "tables": [],
-            })
-
-    # --- 7. Product Mix ---
-    if "Prod Desc" in odd.columns:
-        prod_df, prod_figs = _product_mix(odd, df)
-        if prod_df is not None:
-            sections.append({
-                "heading": "Product Mix",
-                "narrative": _product_narrative(prod_df),
-                "figures": prod_figs,
-                "tables": [("Product Mix", prod_df)],
-            })
-            sheets.append({
-                "name": "S5 Product Mix",
-                "df": prod_df,
-                "currency_cols": ["Avg Spend/Acct"],
+                "name": "S5 Gen Distribution",
+                "df": gen_dist,
+                "currency_cols": [],
                 "pct_cols": ["% of Accounts"],
                 "number_cols": ["Accounts"],
             })
 
-    # --- 8. Age Distribution Histogram ---
-    if "Account Holder Age" in odd.columns:
-        age_df, age_fig = _age_distribution(odd)
-        if age_df is not None:
+    # --- 2. Generation Spend Profiles ---
+    if "generation" in df.columns:
+        result = _safe("Generation Spend Profiles", _generation_spend_profiles, df)
+        if result is not None:
+            profile_df, profile_fig = result
             sections.append({
-                "heading": "Age Band Distribution",
-                "narrative": _age_dist_narrative(age_df),
-                "figures": [age_fig],
-                "tables": [("Age Bands", age_df)],
+                "heading": "Generation Spend Profiles",
+                "narrative": _spend_profile_narrative(profile_df),
+                "figures": [profile_fig],
+                "tables": [("Generation Spend Profiles", profile_df)],
             })
             sheets.append({
-                "name": "S5 Age Bands",
-                "df": age_df,
-                "pct_cols": ["% of Total"],
+                "name": "S5 Gen Spend Profiles",
+                "df": profile_df,
+                "currency_cols": ["Total Spend", "Avg Transaction"],
+                "pct_cols": [],
+                "number_cols": ["Transactions", "Unique Merchants"],
+            })
+
+    # --- 3. Account Tenure Analysis ---
+    if "tenure_years" in odd.columns:
+        result = _safe("Account Tenure Analysis", _tenure_analysis, odd, df)
+        if result is not None:
+            tenure_df, tenure_figs = result
+            sections.append({
+                "heading": "Account Tenure Analysis",
+                "narrative": _tenure_narrative(tenure_df),
+                "figures": tenure_figs,
+                "tables": [("Tenure Buckets", tenure_df)],
+            })
+            sheets.append({
+                "name": "S5 Tenure Analysis",
+                "df": tenure_df,
+                "currency_cols": ["Avg Spend per Account"],
+                "pct_cols": ["% of Accounts"],
                 "number_cols": ["Accounts"],
             })
 
+    # --- 4. Branch Performance Dashboard ---
+    if "Branch" in df.columns:
+        result = _safe("Branch Performance", _branch_performance, df, odd)
+        if result is not None:
+            branch_df, branch_fig = result
+            if branch_df is not None:
+                sections.append({
+                    "heading": "Branch Performance Dashboard",
+                    "narrative": _branch_narrative(branch_df),
+                    "figures": [branch_fig],
+                    "tables": [("Top Branches", branch_df.head(TOP_BRANCHES))],
+                })
+                sheets.append({
+                    "name": "S5 Branch Performance",
+                    "df": branch_df,
+                    "currency_cols": ["Total Spend", "Avg Spend/Acct", "Avg Balance"],
+                    "pct_cols": [],
+                    "number_cols": ["Accounts", "Transactions"],
+                })
+
+    # --- 5. Branch-Generation Heatmap ---
+    if "Branch" in df.columns and "generation" in df.columns:
+        result = _safe("Branch-Generation Heatmap", _branch_generation_heatmap, df)
+        if result is not None:
+            hm_df, hm_fig = result
+            if hm_df is not None:
+                sections.append({
+                    "heading": "Branch-Generation Heatmap",
+                    "narrative": (
+                        "Cross-tabulation of total spend by branch and generation. "
+                        "Darker cells indicate higher concentration of spend, revealing "
+                        "which branches serve which demographic segments."
+                    ),
+                    "figures": [hm_fig],
+                    "tables": [("Branch x Generation Spend", hm_df.reset_index())],
+                })
+                sheets.append({
+                    "name": "S5 Branch Gen Heatmap",
+                    "df": hm_df.reset_index(),
+                    "currency_cols": list(hm_df.columns),
+                    "pct_cols": [],
+                    "number_cols": [],
+                })
+
+    # --- 6. Age vs Spend Scatter ---
+    if "Account Holder Age" in df.columns:
+        result = _safe("Age vs Spend", _age_spend_scatter, df)
+        if result is not None:
+            scatter_df, scatter_fig = result
+            if scatter_df is not None:
+                sections.append({
+                    "heading": "Age vs Spend Analysis",
+                    "narrative": _age_spend_narrative(scatter_df),
+                    "figures": [scatter_fig],
+                    "tables": [],
+                })
+
+    # --- 7. Product Mix ---
+    if "Prod Desc" in odd.columns:
+        result = _safe("Product Mix", _product_mix, odd, df)
+        if result is not None:
+            prod_df, prod_figs = result
+            if prod_df is not None:
+                sections.append({
+                    "heading": "Product Mix",
+                    "narrative": _product_narrative(prod_df),
+                    "figures": prod_figs,
+                    "tables": [("Product Mix", prod_df)],
+                })
+                sheets.append({
+                    "name": "S5 Product Mix",
+                    "df": prod_df,
+                    "currency_cols": ["Avg Spend/Acct"],
+                    "pct_cols": ["% of Accounts"],
+                    "number_cols": ["Accounts"],
+                })
+
+    # --- 8. Age Distribution Histogram ---
+    if "Account Holder Age" in odd.columns:
+        result = _safe("Age Distribution", _age_distribution, odd)
+        if result is not None:
+            age_df, age_fig = result
+            if age_df is not None:
+                sections.append({
+                    "heading": "Age Band Distribution",
+                    "narrative": _age_dist_narrative(age_df),
+                    "figures": [age_fig],
+                    "tables": [("Age Bands", age_df)],
+                })
+                sheets.append({
+                    "name": "S5 Age Bands",
+                    "df": age_df,
+                    "pct_cols": ["% of Total"],
+                    "number_cols": ["Accounts"],
+                })
+
     # --- 9. Balance Tier Demographics ---
     if "balance_tier" in odd.columns and "generation" in odd.columns:
-        bt_df, bt_fig = _balance_tier_demographics(odd)
-        if bt_df is not None:
-            sections.append({
-                "heading": "Balance Tier by Generation",
-                "narrative": (
-                    "Cross-tabulation of balance tiers and generations reveals "
-                    "how different age groups distribute across balance levels."
-                ),
-                "figures": [bt_fig],
-                "tables": [("Balance Tier x Generation", bt_df)],
-            })
-            sheets.append({
-                "name": "S5 Balance Gen",
-                "df": bt_df,
-                "pct_cols": [],
-                "number_cols": list(bt_df.columns[1:]),
-            })
+        result = _safe("Balance Tier Demographics", _balance_tier_demographics, odd)
+        if result is not None:
+            bt_df, bt_fig = result
+            if bt_df is not None:
+                sections.append({
+                    "heading": "Balance Tier by Generation",
+                    "narrative": (
+                        "Cross-tabulation of balance tiers and generations reveals "
+                        "how different age groups distribute across balance levels."
+                    ),
+                    "figures": [bt_fig],
+                    "tables": [("Balance Tier x Generation", bt_df)],
+                })
+                sheets.append({
+                    "name": "S5 Balance Gen",
+                    "df": bt_df,
+                    "pct_cols": [],
+                    "number_cols": list(bt_df.columns[1:]),
+                })
 
     # --- 10. Segmentation Ladder ---
     seg_col = _find_segmentation_col(odd)
     if seg_col:
-        seg_df, seg_fig = _segmentation_ladder(odd, seg_col)
-        if seg_df is not None:
-            sections.append({
-                "heading": "Segmentation Tier Distribution",
-                "narrative": (
-                    f"Account distribution across segmentation tiers from "
-                    f"the <b>{seg_col}</b> column."
-                ),
-                "figures": [seg_fig],
-                "tables": [("Segmentation Tiers", seg_df)],
-            })
-            sheets.append({
-                "name": "S5 Segmentation",
-                "df": seg_df,
-                "pct_cols": ["% of Accounts"],
-                "number_cols": ["Accounts"],
-            })
+        result = _safe("Segmentation Ladder", _segmentation_ladder, odd, seg_col)
+        if result is not None:
+            seg_df, seg_fig = result
+            if seg_df is not None:
+                sections.append({
+                    "heading": "Segmentation Tier Distribution",
+                    "narrative": (
+                        f"Account distribution across segmentation tiers from "
+                        f"the <b>{seg_col}</b> column."
+                    ),
+                    "figures": [seg_fig],
+                    "tables": [("Segmentation Tiers", seg_df)],
+                })
+                sheets.append({
+                    "name": "S5 Segmentation",
+                    "df": seg_df,
+                    "pct_cols": ["% of Accounts"],
+                    "number_cols": ["Accounts"],
+                })
 
     # --- 11. Branch Headcount ---
     if "Branch" in odd.columns:
-        hc_df, hc_fig = _branch_headcount(odd)
-        if hc_df is not None:
-            sections.append({
-                "heading": "Branch Account Headcount",
-                "narrative": (
-                    f"Account distribution across <b>{len(hc_df)}</b> branches. "
-                    f"Top branch: <b>{hc_df.iloc[0]['Branch']}</b> "
-                    f"with <b>{int(hc_df.iloc[0]['Accounts']):,}</b> accounts."
-                ),
-                "figures": [hc_fig],
-                "tables": [],
-            })
-            sheets.append({
-                "name": "S5 Branch Headcount",
-                "df": hc_df,
-                "pct_cols": ["% of Total"],
-                "number_cols": ["Accounts"],
-            })
+        result = _safe("Branch Headcount", _branch_headcount, odd)
+        if result is not None:
+            hc_df, hc_fig = result
+            if hc_df is not None:
+                sections.append({
+                    "heading": "Branch Account Headcount",
+                    "narrative": (
+                        f"Account distribution across <b>{len(hc_df)}</b> branches. "
+                        f"Top branch: <b>{hc_df.iloc[0]['Branch']}</b> "
+                        f"with <b>{int(hc_df.iloc[0]['Accounts']):,}</b> accounts."
+                    ),
+                    "figures": [hc_fig],
+                    "tables": [],
+                })
+                sheets.append({
+                    "name": "S5 Branch Headcount",
+                    "df": hc_df,
+                    "pct_cols": ["% of Total"],
+                    "number_cols": ["Accounts"],
+                })
 
     return {
         "title": "S5: Demographics & Branch Performance",
@@ -355,7 +389,7 @@ def _tenure_analysis(odd, df):
     )
 
     bucket_stats = odd.groupby("Tenure Bucket", observed=True).agg(
-        accounts=("primary_account_num", "nunique"),
+        accounts=("Acct Number", "nunique"),
     ).reset_index()
     total_accts = bucket_stats["accounts"].sum()
     bucket_stats["% of Accounts"] = np.where(

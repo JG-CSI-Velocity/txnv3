@@ -15,7 +15,7 @@ from v4_themes import (
     COLORS, CATEGORY_PALETTE, GENERATION_COLORS,
     apply_theme, format_currency,
     horizontal_bar, donut_chart, heatmap, line_trend,
-    lollipop_chart, bullet_chart, waterfall_chart,
+    lollipop_chart, grouped_bar, waterfall_chart,
     insight_title,
 )
 
@@ -234,13 +234,14 @@ def _stage3_onboarding(odd, df, sections, sheets):
 # =============================================================================
 
 def _stage4_early_engagement(odd, df, ctx, sections, sheets):
-    if "Date Opened" not in odd.columns:
+    # Date Opened is already on combined_df via _MERGE_COLS; use it directly
+    # to avoid column collision from re-merging with ODD.
+    if "Date Opened" not in df.columns:
         return
 
-    accts = odd[["Acct Number", "Date Opened"]].dropna(subset=["Date Opened"]).copy()
-    merged = df.merge(accts, left_on="primary_account_num", right_on="Acct Number", how="inner")
-    merged["days_since_open"] = (merged["transaction_date"] - merged["Date Opened"]).dt.days
-    early = merged[(merged["days_since_open"] >= 0) & (merged["days_since_open"] <= 90)]
+    valid = df.dropna(subset=["Date Opened"]).copy()
+    valid["days_since_open"] = (valid["transaction_date"] - valid["Date Opened"]).dt.days
+    early = valid[(valid["days_since_open"] >= 0) & (valid["days_since_open"] <= 90)]
 
     if early.empty:
         return
@@ -358,9 +359,10 @@ def _stage5_daily_banking(odd, df, sections, sheets):
         {"Metric": "Avg Ticket Size ($)", "This CU": round(avg_ticket, 2), "PULSE 2024": 46.89},
     ])
 
-    bench_fig = apply_theme(bullet_chart(
-        benchmark, "Metric", "This CU", "PULSE 2024",
+    bench_fig = apply_theme(grouped_bar(
+        benchmark, "Metric", ["This CU", "PULSE 2024"],
         "Performance vs PULSE 2024 Benchmark",
+        colors=[COLORS["primary"], COLORS["accent"]],
     ))
 
     primary_count = int(class_dist.loc[class_dist["Classification"] == "Primary (60+)", "Accounts"].sum())
@@ -595,8 +597,10 @@ def _stage8_attrition(odd, df, sections, sheets):
         values.append(int(row["Accounts"].iloc[0]) if not row.empty else 0)
 
     wf_df = pd.DataFrame({"Stage": labels, "Accounts": values})
+    wf_labels = labels + ["Total"]
+    wf_values = values + [sum(values)]
     wf_fig = apply_theme(waterfall_chart(
-        wf_df, "Stage", "Accounts",
+        wf_labels, wf_values,
         "Lifecycle Classification Waterfall",
     ))
 
