@@ -147,11 +147,91 @@ def run(ctx: dict) -> dict:
                 "number_cols": ["Accounts"],
             })
 
+    # --- 8. Age Distribution Histogram ---
+    if "Account Holder Age" in odd.columns:
+        age_df, age_fig = _age_distribution(odd)
+        if age_df is not None:
+            sections.append({
+                "heading": "Age Band Distribution",
+                "narrative": _age_dist_narrative(age_df),
+                "figures": [age_fig],
+                "tables": [("Age Bands", age_df)],
+            })
+            sheets.append({
+                "name": "S5 Age Bands",
+                "df": age_df,
+                "pct_cols": ["% of Total"],
+                "number_cols": ["Accounts"],
+            })
+
+    # --- 9. Balance Tier Demographics ---
+    if "balance_tier" in odd.columns and "generation" in odd.columns:
+        bt_df, bt_fig = _balance_tier_demographics(odd)
+        if bt_df is not None:
+            sections.append({
+                "heading": "Balance Tier by Generation",
+                "narrative": (
+                    "Cross-tabulation of balance tiers and generations reveals "
+                    "how different age groups distribute across balance levels."
+                ),
+                "figures": [bt_fig],
+                "tables": [("Balance Tier x Generation", bt_df)],
+            })
+            sheets.append({
+                "name": "S5 Balance Gen",
+                "df": bt_df,
+                "pct_cols": [],
+                "number_cols": list(bt_df.columns[1:]),
+            })
+
+    # --- 10. Segmentation Ladder ---
+    seg_col = _find_segmentation_col(odd)
+    if seg_col:
+        seg_df, seg_fig = _segmentation_ladder(odd, seg_col)
+        if seg_df is not None:
+            sections.append({
+                "heading": "Segmentation Tier Distribution",
+                "narrative": (
+                    f"Account distribution across segmentation tiers from "
+                    f"the <b>{seg_col}</b> column."
+                ),
+                "figures": [seg_fig],
+                "tables": [("Segmentation Tiers", seg_df)],
+            })
+            sheets.append({
+                "name": "S5 Segmentation",
+                "df": seg_df,
+                "pct_cols": ["% of Accounts"],
+                "number_cols": ["Accounts"],
+            })
+
+    # --- 11. Branch Headcount ---
+    if "Branch" in odd.columns:
+        hc_df, hc_fig = _branch_headcount(odd)
+        if hc_df is not None:
+            sections.append({
+                "heading": "Branch Account Headcount",
+                "narrative": (
+                    f"Account distribution across <b>{len(hc_df)}</b> branches. "
+                    f"Top branch: <b>{hc_df.iloc[0]['Branch']}</b> "
+                    f"with <b>{int(hc_df.iloc[0]['Accounts']):,}</b> accounts."
+                ),
+                "figures": [hc_fig],
+                "tables": [],
+            })
+            sheets.append({
+                "name": "S5 Branch Headcount",
+                "df": hc_df,
+                "pct_cols": ["% of Total"],
+                "number_cols": ["Accounts"],
+            })
+
     return {
         "title": "S5: Demographics & Branch Performance",
         "description": (
             "Generation mix, tenure analysis, branch performance, "
-            "age-spend patterns, product mix"
+            "age-spend patterns, product mix, age bands, balance tiers, "
+            "segmentation ladder, branch headcount"
         ),
         "sections": sections,
         "sheets": sheets,
@@ -515,7 +595,7 @@ def _product_mix(odd, df):
         prod_spend = prod_spend.sort_values("Avg Spend/Acct", ascending=False)
 
         bar_fig = go.Figure(go.Bar(
-            x=prod_spend["Prod Desc"].str[:30],
+            x=prod_spend["Prod Desc"].astype(str).str[:30],
             y=prod_spend["Avg Spend/Acct"],
             marker_color=COLORS["accent"],
             text=prod_spend["Avg Spend/Acct"].apply(format_currency),
@@ -554,3 +634,134 @@ def _product_narrative(prod_df):
             f"per account at {format_currency(top_spend['Avg Spend/Acct'])}."
         )
     return narrative
+
+
+# =============================================================================
+# 8. Age Distribution Histogram
+# =============================================================================
+
+AGE_BINS = [0, 25, 35, 45, 55, 65, 200]
+AGE_LABELS = ["18-25", "26-35", "36-45", "46-55", "56-65", "65+"]
+
+
+def _age_distribution(odd):
+    ages = odd["Account Holder Age"].dropna()
+    if ages.empty:
+        return None, None
+    buckets = pd.cut(ages, bins=AGE_BINS, labels=AGE_LABELS, right=True)
+    counts = buckets.value_counts().reindex(AGE_LABELS, fill_value=0).reset_index()
+    counts.columns = ["Age Band", "Accounts"]
+    total = counts["Accounts"].sum()
+    counts["% of Total"] = (counts["Accounts"] / total * 100).round(1) if total else 0
+
+    fig = go.Figure(go.Bar(
+        x=counts["Age Band"], y=counts["Accounts"],
+        marker_color=CATEGORY_PALETTE[:len(counts)],
+        text=[f"{v:,}" for v in counts["Accounts"]],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        title="Account Distribution by Age Band",
+        xaxis_title=None, yaxis_title="Accounts", yaxis_tickformat=",",
+    )
+    fig = apply_theme(fig)
+    return counts, fig
+
+
+def _age_dist_narrative(age_df):
+    if age_df.empty:
+        return ""
+    top = age_df.loc[age_df["Accounts"].idxmax()]
+    return (
+        f"The largest age cohort is <b>{top['Age Band']}</b> with "
+        f"<b>{int(top['Accounts']):,}</b> accounts ({top['% of Total']:.1f}%)."
+    )
+
+
+# =============================================================================
+# 9. Balance Tier by Generation
+# =============================================================================
+
+def _balance_tier_demographics(odd):
+    ct = pd.crosstab(odd["balance_tier"], odd["generation"])
+    if ct.empty:
+        return None, None
+    # Stacked bar: generation on x-axis, balance tiers as stacked groups
+    ct_pct = ct.div(ct.sum(axis=0), axis=1).mul(100).round(1)
+    ct_pct = ct_pct.T.reset_index()
+
+    tier_cols = [c for c in ct_pct.columns if c != "generation"]
+    fig = go.Figure()
+    for i, tier in enumerate(tier_cols):
+        fig.add_trace(go.Bar(
+            x=ct_pct["generation"], y=ct_pct[tier],
+            name=str(tier),
+            marker_color=CATEGORY_PALETTE[i % len(CATEGORY_PALETTE)],
+        ))
+    fig.update_layout(
+        barmode="stack",
+        title="Balance Tier Distribution by Generation",
+        yaxis=dict(title="% of Accounts", ticksuffix="%", range=[0, 100]),
+        xaxis_title=None,
+    )
+    fig = apply_theme(fig)
+
+    tbl = ct.reset_index().rename(columns={"balance_tier": "Balance Tier"})
+    return tbl, fig
+
+
+# =============================================================================
+# 10. Segmentation Ladder
+# =============================================================================
+
+import re as _re
+
+_SEG_COLS_RE = _re.compile(r"^[A-Z][a-z]{2}\d{2} Segmentation$")
+
+
+def _find_segmentation_col(odd):
+    """Return the most recent segmentation column, or None."""
+    seg_cols = sorted(
+        [c for c in odd.columns if _SEG_COLS_RE.match(c)],
+        key=lambda c: c[:5],
+    )
+    return seg_cols[-1] if seg_cols else None
+
+
+def _segmentation_ladder(odd, seg_col):
+    vals = odd[seg_col].dropna().astype(str).str.strip()
+    vals = vals[vals != ""]
+    if vals.empty:
+        return None, None
+    counts = vals.value_counts().reset_index()
+    counts.columns = ["Segment", "Accounts"]
+    total = counts["Accounts"].sum()
+    counts["% of Accounts"] = (counts["Accounts"] / total * 100).round(1) if total else 0
+    counts = counts.sort_values("Accounts", ascending=True)
+
+    fig = apply_theme(horizontal_bar(
+        counts, "Accounts", "Segment",
+        f"Segmentation Distribution ({seg_col.replace(' Segmentation', '')})",
+        top_n=20,
+    ))
+    return counts, fig
+
+
+# =============================================================================
+# 11. Branch Headcount
+# =============================================================================
+
+def _branch_headcount(odd):
+    if "Branch" not in odd.columns:
+        return None, None
+    counts = odd["Branch"].value_counts().reset_index()
+    counts.columns = ["Branch", "Accounts"]
+    total = counts["Accounts"].sum()
+    counts["% of Total"] = (counts["Accounts"] / total * 100).round(1) if total else 0
+
+    fig = apply_theme(horizontal_bar(
+        counts, "Accounts", "Branch",
+        f"Account Headcount by Branch (Top {min(25, len(counts))})",
+        top_n=25,
+    ))
+    return counts, fig

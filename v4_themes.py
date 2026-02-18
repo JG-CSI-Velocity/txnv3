@@ -179,16 +179,22 @@ def format_pct(value: float) -> str:
 def _fmt_value(val: float, fmt_spec: str) -> str:
     """Internal: format a value using a Python format spec.
 
-    Handles leading '$' in the spec (e.g. '${:,.0f}').
+    Handles leading '$' in the spec (e.g. '${:,.0f}') and trailing
+    suffixes after '}' (e.g. '{:.1f}%').
     """
     spec = fmt_spec
+    prefix = ""
+    suffix = ""
     if spec.startswith("$"):
+        prefix = "$"
         spec = spec[1:]
-    # Strip the '{:' and '}' wrapper if present
-    if spec.startswith("{:") and spec.endswith("}"):
-        spec = spec[2:-1]
-    prefix = "$" if fmt_spec.startswith("$") else ""
-    return f"{prefix}{float(val):{spec}}"
+    # Strip the '{:' ... '}' wrapper, preserving any suffix after '}'
+    if spec.startswith("{:"):
+        brace_idx = spec.find("}")
+        if brace_idx >= 0:
+            suffix = spec[brace_idx + 1:]
+            spec = spec[2:brace_idx]
+    return f"{prefix}{float(val):{spec}}{suffix}"
 
 
 # =============================================================================

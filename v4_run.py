@@ -21,21 +21,27 @@ from v4_html_report import generate_html_report
 import v4_s1_portfolio_health as s1
 import v4_s2_merchant_intel as s2
 import v4_s3_competition as s3
+import v4_s3_threat_analysis as s3b
+import v4_s3_segmentation as s3c
 import v4_s4_finserv as s4
 import v4_s5_demographics as s5
 import v4_s6_risk as s6
 import v4_s7_campaigns as s7
 import v4_s8_payroll as s8
+import v4_s9_lifecycle as s9
 
 ALL_STORYLINES = [
     ("s1_portfolio", s1),
     ("s2_merchant", s2),
     ("s3_competition", s3),
+    ("s3b_threats", s3b),
+    ("s3c_segmentation", s3c),
     ("s4_finserv", s4),
     ("s5_demographics", s5),
     ("s6_risk", s6),
     ("s7_campaigns", s7),
     ("s8_payroll", s8),
+    ("s9_lifecycle", s9),
 ]
 
 # Public mapping for the Streamlit app to look up labels
@@ -43,11 +49,14 @@ STORYLINE_LABELS: dict[str, str] = {
     "s1_portfolio": "S1: Portfolio Health",
     "s2_merchant": "S2: Merchant Intelligence",
     "s3_competition": "S3: Competitive Landscape",
+    "s3b_threats": "S3B: Threat Intelligence",
+    "s3c_segmentation": "S3C: Account Segmentation",
     "s4_finserv": "S4: Financial Services",
     "s5_demographics": "S5: Demographics & Branches",
     "s6_risk": "S6: Risk & Balance",
     "s7_campaigns": "S7: Campaign Effectiveness",
     "s8_payroll": "S8: Payroll & Circular Economy",
+    "s9_lifecycle": "S9: Lifecycle Management",
 }
 
 

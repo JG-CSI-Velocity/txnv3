@@ -73,6 +73,41 @@ def run(ctx: dict) -> dict:
         "number_cols": ["Transactions"],
     })
 
+    # --- Monthly Distribution Variance ---
+    if "year_month" in df.columns:
+        variance_df, variance_fig = _monthly_distribution_variance(df)
+        if variance_df is not None and not variance_df.empty:
+            sections.append({
+                "heading": "Monthly Transaction Distribution Variance",
+                "narrative": _variance_narrative(variance_df),
+                "figures": [variance_fig],
+                "tables": [("Monthly Bracket %", variance_df)],
+            })
+            sheets.append({
+                "name": "S1 Monthly Dist Var",
+                "df": variance_df,
+                "currency_cols": [],
+                "pct_cols": [c for c in variance_df.columns if c != "Month"],
+                "number_cols": [],
+            })
+
+            # --- Bracket Volatility Analysis ---
+            vol_df = _bracket_volatility(variance_df)
+            if vol_df is not None and not vol_df.empty:
+                sections.append({
+                    "heading": "Bracket Volatility Analysis",
+                    "narrative": _volatility_narrative(vol_df),
+                    "figures": [],
+                    "tables": [("Bracket Volatility", vol_df)],
+                })
+                sheets.append({
+                    "name": "S1 Bracket Volatil",
+                    "df": vol_df,
+                    "currency_cols": [],
+                    "pct_cols": ["Mean %", "Std Dev", "Min %", "Max %", "Range"],
+                    "number_cols": [],
+                })
+
     # --- PIN vs Signature Mix ---
     pin_sig_df, pin_sig_fig = _pin_sig_mix(df)
     if pin_sig_df is not None:
@@ -127,9 +162,42 @@ def run(ctx: dict) -> dict:
             "number_cols": ["Accounts"],
         })
 
+    # --- Overall Summary Statistics ---
+    summary_df = _summary_statistics(df, odd)
+    sections.append({
+        "heading": "Overall Summary Statistics",
+        "narrative": "Key portfolio-level scalar metrics.",
+        "figures": [],
+        "tables": [("Summary Statistics", summary_df)],
+    })
+    sheets.append({
+        "name": "S1 Summary Stats", "df": summary_df,
+        "currency_cols": [], "number_cols": ["Value"],
+    })
+
+    # --- Card Present vs Card Not Present ---
+    if "card_present" in df.columns:
+        cp_df, cp_fig = _card_present_analysis(df)
+        if cp_df is not None:
+            sections.append({
+                "heading": "Card Present vs Card Not Present",
+                "narrative": _cp_narrative(cp_df),
+                "figures": [cp_fig],
+                "tables": [("CP vs CNP", cp_df)],
+            })
+            sheets.append({
+                "name": "S1 CP vs CNP", "df": cp_df,
+                "currency_cols": ["Total Spend"],
+                "pct_cols": ["% of Transactions", "% of Spend"],
+                "number_cols": ["Transactions"],
+            })
+
     return {
         "title": "S1: Portfolio Health Dashboard",
-        "description": "Monthly trends, transaction distribution, PIN/Sig mix, balance tiers, activation",
+        "description": (
+            "Monthly trends, transaction distribution, PIN/Sig mix, "
+            "balance tiers, activation, summary stats, card present/not present"
+        ),
         "sections": sections,
         "sheets": sheets,
     }
@@ -246,15 +314,20 @@ def _monthly_narrative(monthly_df):
 # Transaction Distribution
 # =============================================================================
 
-def _transaction_distribution(df):
-    bins = [0, 1, 5, 10, 25, 50, 100, 500, float("inf")]
-    labels = ["< $1", "$1-5", "$5-10", "$10-25", "$25-50", "$50-100", "$100-500", "$500+"]
+AMOUNT_BINS = [0, 1, 5, 10, 25, 50, 100, 500, float("inf")]
+AMOUNT_LABELS = ["< $1", "$1-5", "$5-10", "$10-25", "$25-50", "$50-100", "$100-500", "$500+"]
+BRACKET_COLORS = [
+    COLORS["primary"], COLORS["secondary"], COLORS["accent"],
+    COLORS["positive"], "#A23B72", COLORS["negative"], "#5C6B73", COLORS["neutral"],
+]
 
+
+def _transaction_distribution(df):
     df = df.copy()
-    df["bracket"] = pd.cut(df["amount"], bins=bins, labels=labels, right=False)
+    df["bracket"] = pd.cut(df["amount"], bins=AMOUNT_BINS, labels=AMOUNT_LABELS, right=False)
 
     stats = []
-    for bracket in labels:
+    for bracket in AMOUNT_LABELS:
         bracket_data = df[df["bracket"] == bracket]
         count = len(bracket_data)
         total_val = bracket_data["amount"].sum()
@@ -269,14 +342,11 @@ def _transaction_distribution(df):
     dist_df = pd.DataFrame(stats)
 
     # Chart
-    colors = [COLORS["primary"], COLORS["secondary"], COLORS["accent"],
-              COLORS["positive"], "#A23B72", COLORS["negative"], "#5C6B73", COLORS["neutral"]]
-
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=dist_df["Amount Range"],
         y=dist_df["Transactions"],
-        marker_color=colors[:len(dist_df)],
+        marker_color=BRACKET_COLORS[:len(dist_df)],
         text=[f"{t:,}<br>({p}%)" for t, p in zip(dist_df["Transactions"], dist_df["Trans %"])],
         textposition="outside",
         textfont=dict(size=10),
@@ -308,6 +378,177 @@ def _distribution_narrative(dist_df):
         f"while large transactions (&gt;$100) represent <b>{large_pct:.1f}%</b> of total value. "
         f"The highest-value bracket is <b>{top_value['Amount Range']}</b> "
         f"({format_currency(top_value['Total Value'])})."
+    )
+
+
+# =============================================================================
+# Monthly Transaction Distribution Variance
+# =============================================================================
+
+def _monthly_distribution_variance(df):
+    """Compute bracket percentage distribution per month and build a stacked bar chart."""
+    df = df.copy()
+    df["bracket"] = pd.cut(
+        df["amount"], bins=AMOUNT_BINS, labels=AMOUNT_LABELS, right=False,
+    )
+
+    # Crosstab: rows = year_month, columns = bracket, values = % of row total
+    crosstab = pd.crosstab(
+        df["year_month"], df["bracket"], normalize="index",
+    ) * 100
+
+    # Ensure all brackets are present as columns in the correct order
+    for label in AMOUNT_LABELS:
+        if label not in crosstab.columns:
+            crosstab[label] = 0.0
+    crosstab = crosstab[AMOUNT_LABELS].round(2)
+
+    if crosstab.empty:
+        return None, None
+
+    # Build output DataFrame
+    variance_df = crosstab.reset_index()
+    variance_df["year_month"] = variance_df["year_month"].astype(str)
+    variance_df = variance_df.rename(columns={"year_month": "Month"})
+
+    # Stacked bar chart (100% mode) -- data is already in percentages
+    fig = go.Figure()
+    for idx, bracket in enumerate(AMOUNT_LABELS):
+        color = BRACKET_COLORS[idx % len(BRACKET_COLORS)]
+        fig.add_trace(go.Bar(
+            x=variance_df["Month"],
+            y=variance_df[bracket],
+            name=bracket,
+            marker_color=color,
+            hovertemplate=(
+                "%{x}<br>" + bracket + ": %{y:.1f}%<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        title="Monthly Transaction Distribution by Amount Bracket",
+        xaxis=dict(
+            title=None,
+            tickangle=-45 if len(variance_df) > 8 else 0,
+        ),
+        yaxis=dict(
+            title="% of Transactions",
+            ticksuffix="%",
+            range=[0, 100],
+        ),
+        height=500,
+    )
+    fig = apply_theme(fig)
+
+    return variance_df, fig
+
+
+def _variance_narrative(variance_df):
+    """Summarize how the distribution has shifted over the analysis period."""
+    if variance_df is None or len(variance_df) < 2:
+        return "Insufficient monthly data for distribution variance analysis."
+
+    bracket_cols = [c for c in variance_df.columns if c != "Month"]
+    first_month = variance_df.iloc[0]
+    last_month = variance_df.iloc[-1]
+
+    # Find the bracket with the largest absolute shift
+    shifts = {}
+    for col in bracket_cols:
+        shifts[col] = last_month[col] - first_month[col]
+
+    biggest_shift_bracket = max(shifts, key=lambda k: abs(shifts[k]))
+    biggest_shift_val = shifts[biggest_shift_bracket]
+    shift_dir = "increased" if biggest_shift_val > 0 else "decreased"
+
+    # Find most dominant bracket in the latest month
+    dominant = max(bracket_cols, key=lambda c: last_month[c])
+    dominant_pct = last_month[dominant]
+
+    return (
+        f"Across <b>{len(variance_df)}</b> months, the <b>{biggest_shift_bracket}</b> bracket "
+        f"showed the largest shift, having {shift_dir} by "
+        f"<b>{abs(biggest_shift_val):.1f} percentage points</b> from "
+        f"{first_month[biggest_shift_bracket]:.1f}% to {last_month[biggest_shift_bracket]:.1f}%. "
+        f"In the most recent month, the dominant bracket is <b>{dominant}</b> "
+        f"at <b>{dominant_pct:.1f}%</b> of all transactions."
+    )
+
+
+# =============================================================================
+# Bracket Volatility Analysis
+# =============================================================================
+
+VOLATILITY_STABLE_THRESHOLD = 1.0
+VOLATILITY_MODERATE_THRESHOLD = 2.0
+
+
+def _bracket_volatility(variance_df):
+    """Compute mean, std, min, max, range, and classification for each bracket."""
+    if variance_df is None or len(variance_df) < 2:
+        return None
+
+    bracket_cols = [c for c in variance_df.columns if c != "Month"]
+    rows = []
+    for col in bracket_cols:
+        series = variance_df[col]
+        mean_val = series.mean()
+        std_val = series.std()
+        min_val = series.min()
+        max_val = series.max()
+        range_val = max_val - min_val
+
+        if std_val < VOLATILITY_STABLE_THRESHOLD:
+            classification = "Stable"
+        elif std_val <= VOLATILITY_MODERATE_THRESHOLD:
+            classification = "Moderate"
+        else:
+            classification = "Volatile"
+
+        rows.append({
+            "Bracket": col,
+            "Mean %": round(mean_val, 2),
+            "Std Dev": round(std_val, 2),
+            "Min %": round(min_val, 2),
+            "Max %": round(max_val, 2),
+            "Range": round(range_val, 2),
+            "Classification": classification,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _volatility_narrative(vol_df):
+    """Summarize the most stable and most volatile brackets."""
+    if vol_df is None or vol_df.empty:
+        return ""
+
+    most_stable = vol_df.loc[vol_df["Std Dev"].idxmin()]
+    most_volatile = vol_df.loc[vol_df["Std Dev"].idxmax()]
+
+    stable_count = (vol_df["Classification"] == "Stable").sum()
+    moderate_count = (vol_df["Classification"] == "Moderate").sum()
+    volatile_count = (vol_df["Classification"] == "Volatile").sum()
+
+    parts = []
+    if stable_count > 0:
+        parts.append(f"<b>{stable_count}</b> Stable")
+    if moderate_count > 0:
+        parts.append(f"<b>{moderate_count}</b> Moderate")
+    if volatile_count > 0:
+        parts.append(f"<b>{volatile_count}</b> Volatile")
+    summary = ", ".join(parts)
+
+    return (
+        f"Bracket volatility classification: {summary}. "
+        f"The most stable bracket is <b>{most_stable['Bracket']}</b> "
+        f"(Std Dev: {most_stable['Std Dev']:.2f}%, "
+        f"range: {most_stable['Min %']:.1f}%-{most_stable['Max %']:.1f}%). "
+        f"The most volatile bracket is <b>{most_volatile['Bracket']}</b> "
+        f"(Std Dev: {most_volatile['Std Dev']:.2f}%, "
+        f"range: {most_volatile['Min %']:.1f}%-{most_volatile['Max %']:.1f}%), "
+        f"suggesting month-over-month fluctuation in this spending segment."
     )
 
 
@@ -473,4 +714,89 @@ def _activation_narrative(act_df):
         f"<b>{rate:.1f}%</b> of accounts ({active:,}) have an active debit card. "
         f"<b>{inactive:,}</b> accounts without debit cards represent an opportunity "
         f"for activation campaigns."
+    )
+
+
+# =============================================================================
+# Summary Statistics Table
+# =============================================================================
+
+def _summary_statistics(df, odd):
+    total_spend = df["amount"].sum()
+    total_txn = len(df)
+    unique_accts = df["primary_account_num"].nunique()
+    merch_col = "merchant_consolidated" if "merchant_consolidated" in df.columns else "merchant_name"
+    unique_merchants = df[merch_col].nunique()
+    avg_ticket = df["amount"].mean()
+    median_ticket = df["amount"].median()
+    months = df["year_month"].nunique() if "year_month" in df.columns else 1
+
+    rows = [
+        {"Metric": "Total Spend", "Value": round(total_spend, 2)},
+        {"Metric": "Total Transactions", "Value": total_txn},
+        {"Metric": "Unique Accounts", "Value": unique_accts},
+        {"Metric": "Unique Merchants", "Value": unique_merchants},
+        {"Metric": "Months of Data", "Value": months},
+        {"Metric": "Avg Transaction", "Value": round(avg_ticket, 2)},
+        {"Metric": "Median Transaction", "Value": round(median_ticket, 2)},
+        {"Metric": "Avg Txns/Account", "Value": round(total_txn / unique_accts, 1) if unique_accts else 0},
+        {"Metric": "Avg Spend/Account", "Value": round(total_spend / unique_accts, 2) if unique_accts else 0},
+    ]
+
+    if odd is not None:
+        rows.append({"Metric": "ODD Accounts", "Value": len(odd)})
+        if "Avg Bal" in odd.columns:
+            avg_bal = odd["Avg Bal"].mean()
+            rows.append({"Metric": "Avg Balance", "Value": round(avg_bal, 2)})
+
+    return pd.DataFrame(rows)
+
+
+# =============================================================================
+# Card Present vs Card Not Present
+# =============================================================================
+
+def _card_present_analysis(df):
+    cp_col = df["card_present"].astype(str).str.strip().str.upper()
+    cp_map = {
+        "Y": "Card Present", "YES": "Card Present", "TRUE": "Card Present", "1": "Card Present",
+        "N": "Card Not Present", "NO": "Card Not Present", "FALSE": "Card Not Present", "0": "Card Not Present",
+    }
+    df = df.copy()
+    df["cp_label"] = cp_col.map(cp_map).fillna("Unknown")
+
+    agg = df.groupby("cp_label").agg(
+        txn_count=("amount", "count"),
+        total_spend=("amount", "sum"),
+    ).reset_index()
+    total_txn = agg["txn_count"].sum()
+    total_spend = agg["total_spend"].sum()
+    agg["% of Transactions"] = (agg["txn_count"] / total_txn * 100).round(1) if total_txn else 0
+    agg["% of Spend"] = (agg["total_spend"] / total_spend * 100).round(1) if total_spend else 0
+    agg.columns = ["Channel", "Transactions", "Total Spend", "% of Transactions", "% of Spend"]
+    agg = agg.sort_values("Transactions", ascending=False)
+
+    fig = donut_chart(
+        agg["Channel"], agg["Transactions"],
+        "Card Present vs Not Present",
+        colors=[COLORS["primary"], COLORS["accent"], COLORS["neutral"]],
+    )
+    fig = apply_theme(fig)
+    return agg, fig
+
+
+def _cp_narrative(cp_df):
+    if cp_df.empty:
+        return ""
+    cp_row = cp_df[cp_df["Channel"] == "Card Present"]
+    cnp_row = cp_df[cp_df["Channel"] == "Card Not Present"]
+    if cp_row.empty or cnp_row.empty:
+        return ""
+    cp_pct = cp_row["% of Transactions"].iloc[0]
+    cnp_pct = cnp_row["% of Transactions"].iloc[0]
+    cnp_spend_pct = cnp_row["% of Spend"].iloc[0]
+    return (
+        f"Card-present transactions make up <b>{cp_pct:.1f}%</b> of volume. "
+        f"Card-not-present (online/e-commerce) accounts for <b>{cnp_pct:.1f}%</b> "
+        f"of transactions and <b>{cnp_spend_pct:.1f}%</b> of total spend."
     )

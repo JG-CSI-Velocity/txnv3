@@ -381,6 +381,8 @@ _MERGE_COLS = [
     "Debit?",
     "Avg Bal",
     "Account Holder Age",
+    "Date Opened",
+    "Date Closed",
 ]
 
 

@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from v4_themes import (
     COLORS, COMPETITOR_COLORS, GENERATION_COLORS,
     apply_theme, format_currency, format_pct,
-    horizontal_bar, donut_chart, stacked_bar, line_trend,
+    horizontal_bar, donut_chart, stacked_bar, line_trend, grouped_bar,
 )
 
 CATEGORY_LABELS = {
@@ -17,6 +17,13 @@ CATEGORY_LABELS = {
     "credit_unions": "Credit Unions", "digital_banks": "Digital Banks",
     "wallets_p2p": "Wallets & P2P", "bnpl": "BNPL", "alt_finance": "Alt Finance",
 }
+
+FINANCIAL_MCC_CODES = [6010, 6011, 6012, 6051, 6211, 6300]
+
+FINANCIAL_KEYWORDS = [
+    "BANK", "CREDIT UNION", "CU ", "FCU", "SAVINGS BANK",
+    "FINANCIAL", "LENDING", "MORTGAGE",
+]
 
 
 def _detect_competitors(df: pd.DataFrame, config: dict) -> pd.DataFrame:
@@ -69,6 +76,10 @@ def run(ctx: dict) -> dict:
 
     df = _detect_competitors(df, config)
     comp = df[df["competitor_category"].notna()].copy()
+
+    # Store for sub-modules (threat analysis, segmentation)
+    ctx["s3_tagged_df"] = df
+    ctx["s3_competitor_df"] = comp
 
     if comp.empty:
         sections.append({
@@ -198,9 +209,22 @@ def run(ctx: dict) -> dict:
     if "Branch" in comp.columns and comp["Branch"].notna().any():
         _add_branch_exposure(comp, sections, sheets)
 
+    # --- 7. Competitor Penetration by Account Type ---
+    biz = ctx.get("business_df", pd.DataFrame())
+    per = ctx.get("personal_df", pd.DataFrame())
+    if len(biz) > 0 and len(per) > 0:
+        _add_account_type_penetration(biz, per, config, sections, sheets)
+
+    # --- 8. Unmatched Financial Merchant Discovery ---
+    _add_unmatched_financial(df, merch_col, sections, sheets)
+
     return {
         "title": "S3: Competitive Landscape",
-        "description": "Competitor detection, spend analysis, category breakdown, generational penetration, trends, branch exposure",
+        "description": (
+            "Competitor detection, spend analysis, category breakdown, "
+            "generational penetration, trends, branch exposure, "
+            "account type penetration, unmatched financial merchants"
+        ),
         "sections": sections, "sheets": sheets,
     }
 
@@ -322,4 +346,169 @@ def _add_branch_exposure(comp, sections, sheets):
         "name": "S3 Branch Exposure", "df": branch_agg,
         "currency_cols": ["Competitor Spend", "Avg per Account"],
         "pct_cols": [], "number_cols": ["Transactions", "Accounts"],
+    })
+
+
+def _add_account_type_penetration(biz, per, config, sections, sheets):
+    """Compare competitor leakage across Business vs Personal account types."""
+    biz_tagged = _detect_competitors(biz, config)
+    per_tagged = _detect_competitors(per, config)
+
+    biz_comp = biz_tagged[biz_tagged["competitor_category"].notna()]
+    per_comp = per_tagged[per_tagged["competitor_category"].notna()]
+
+    if biz_comp.empty and per_comp.empty:
+        return
+
+    biz_cat = (
+        biz_comp.groupby("competitor_category").agg(
+            Business_Spend=("amount", "sum"),
+            Business_Accounts=("primary_account_num", "nunique"),
+        )
+        if not biz_comp.empty
+        else pd.DataFrame(columns=["Business_Spend", "Business_Accounts"])
+    )
+    per_cat = (
+        per_comp.groupby("competitor_category").agg(
+            Personal_Spend=("amount", "sum"),
+            Personal_Accounts=("primary_account_num", "nunique"),
+        )
+        if not per_comp.empty
+        else pd.DataFrame(columns=["Personal_Spend", "Personal_Accounts"])
+    )
+
+    acct_type = biz_cat.join(per_cat, how="outer").fillna(0)
+    acct_type = acct_type.reset_index().rename(columns={"competitor_category": "Category Key"})
+    acct_type["Category"] = acct_type["Category Key"].map(CATEGORY_LABELS).fillna(acct_type["Category Key"])
+    acct_type = acct_type.rename(columns={
+        "Business_Spend": "Business Spend",
+        "Personal_Spend": "Personal Spend",
+        "Business_Accounts": "Business Accounts",
+        "Personal_Accounts": "Personal Accounts",
+    })
+    acct_type = acct_type.sort_values(
+        by=["Business Spend", "Personal Spend"], ascending=False,
+    ).reset_index(drop=True)
+
+    acct_fig = apply_theme(grouped_bar(
+        acct_type, "Category", ["Business Spend", "Personal Spend"],
+        "Competitor Spend: Business vs Personal Accounts",
+        colors=[COLORS.get("secondary", COLORS["primary"]), COLORS["primary"]],
+    ))
+    acct_fig.update_layout(
+        yaxis_tickprefix="$", yaxis_tickformat=",", yaxis_title="Total Spend ($)",
+    )
+
+    biz_total = acct_type["Business Spend"].sum()
+    per_total = acct_type["Personal Spend"].sum()
+    if biz_total > per_total:
+        leader, trailer = "Business", "Personal"
+        leader_val, trailer_val = biz_total, per_total
+    else:
+        leader, trailer = "Personal", "Business"
+        leader_val, trailer_val = per_total, biz_total
+
+    ratio = (leader_val / trailer_val) if trailer_val > 0 else 0
+    narrative = (
+        f"<b>{leader}</b> accounts show more competitor leakage "
+        f"({format_currency(leader_val)}) compared to {trailer} accounts "
+        f"({format_currency(trailer_val)})"
+    )
+    if trailer_val > 0:
+        narrative += f" -- a {ratio:.1f}x ratio."
+    else:
+        narrative += "."
+
+    export = acct_type[["Category", "Business Spend", "Personal Spend",
+                        "Business Accounts", "Personal Accounts"]]
+    sections.append({
+        "heading": "Competitor Penetration by Account Type",
+        "narrative": narrative,
+        "figures": [acct_fig],
+        "tables": [("Account Type Penetration", export)],
+    })
+    sheets.append({
+        "name": "S3 Account Type", "df": export,
+        "currency_cols": ["Business Spend", "Personal Spend"],
+        "pct_cols": [],
+        "number_cols": ["Business Accounts", "Personal Accounts"],
+    })
+
+
+def _add_unmatched_financial(df, merch_col, sections, sheets):
+    """Discover financial merchants not captured by competitor config.
+
+    Uses MCC codes when available, otherwise falls back to keyword matching.
+    """
+    untagged = df[df["competitor_category"].isna()].copy()
+    if untagged.empty:
+        return
+
+    mcc_col = "mcc_code"
+    if mcc_col in untagged.columns:
+        financial = untagged[untagged[mcc_col].isin(FINANCIAL_MCC_CODES)]
+    else:
+        names_upper = untagged[merch_col].fillna("").str.upper()
+        mask = pd.Series(False, index=untagged.index)
+        for kw in FINANCIAL_KEYWORDS:
+            mask = mask | names_upper.str.contains(kw, regex=False)
+        financial = untagged[mask]
+
+    if financial.empty:
+        sections.append({
+            "heading": "Unmatched Financial Merchant Discovery",
+            "narrative": (
+                "No unmatched financial merchants found. "
+                "The competitor configuration appears comprehensive."
+            ),
+            "figures": [], "tables": [],
+        })
+        return
+
+    summary = (
+        financial.groupby(merch_col).agg(
+            Total_Spend=("amount", "sum"),
+            Transactions=("amount", "count"),
+            Unique_Accounts=("primary_account_num", "nunique"),
+        )
+        .sort_values("Total_Spend", ascending=False)
+        .head(20)
+        .reset_index()
+        .rename(columns={
+            merch_col: "Merchant",
+            "Total_Spend": "Total Spend",
+            "Unique_Accounts": "Unique Accounts",
+        })
+    )
+
+    fig = apply_theme(horizontal_bar(
+        summary, "Total Spend", "Merchant",
+        "Top 20 Unmatched Financial Merchants",
+        color=COLORS.get("warning", COLORS["neutral"]),
+        top_n=20,
+    ))
+
+    total_unmatched_spend = summary["Total Spend"].sum()
+    top_merchant = summary.iloc[0]["Merchant"]
+    top_spend = summary.iloc[0]["Total Spend"]
+
+    narrative = (
+        f"<b>{len(summary)}</b> merchants with financial MCC codes or financial keywords "
+        f"are not in the competitor configuration, totaling "
+        f"{format_currency(total_unmatched_spend)} in spend. "
+        f"The largest is <b>{top_merchant}</b> at {format_currency(top_spend)}. "
+        f"These merchants may warrant addition to the competitor config."
+    )
+
+    sections.append({
+        "heading": "Unmatched Financial Merchant Discovery",
+        "narrative": narrative,
+        "figures": [fig],
+        "tables": [("Unmatched Financial Merchants", summary)],
+    })
+    sheets.append({
+        "name": "S3 Unmatched Financial", "df": summary,
+        "currency_cols": ["Total Spend"],
+        "pct_cols": [],
+        "number_cols": ["Transactions", "Unique Accounts"],
     })

@@ -2,9 +2,10 @@
 # Storyline 4: Financial Services Intelligence
 # =============================================================================
 # FinServ detection, category summary, top providers, generational profile,
-# cross-category overlap analysis
+# cross-category overlap, opportunity scoring, category affinity matrix
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from v4_themes import (
     CATEGORY_PALETTE,
@@ -13,6 +14,7 @@ from v4_themes import (
     donut_chart,
     format_currency,
     grouped_bar,
+    heatmap,
     horizontal_bar,
     insight_title,
     stacked_bar,
@@ -29,6 +31,14 @@ _CATEGORY_LABELS = {
     "business_loans": "Business Loans",
     "treasury_bonds": "Treasury/Bonds",
 }
+
+# Value tier thresholds (dollars)
+_HIGH_VALUE_THRESHOLD = 10_000
+_MEDIUM_VALUE_THRESHOLD = 1_000
+
+# Recency thresholds (days)
+_ACTIVE_DAYS = 30
+_RECENT_DAYS = 90
 
 
 def run(ctx: dict) -> dict:
@@ -95,11 +105,24 @@ def run(ctx: dict) -> dict:
     if cross_sheet is not None:
         sheets.append(cross_sheet)
 
+    # --- 7. Opportunity Scoring ---
+    opp_section, opp_sheet = _opportunity_scoring(fs_df)
+    sections.append(opp_section)
+    sheets.append(opp_sheet)
+
+    # --- 8. Category Affinity Matrix ---
+    affinity_result = _category_affinity_matrix(fs_df)
+    if affinity_result is not None:
+        affinity_section, affinity_sheet = affinity_result
+        sections.append(affinity_section)
+        sheets.append(affinity_sheet)
+
     return {
         "title": "S4: Financial Services Intelligence",
         "description": (
             "External financial service usage: detection, category breakdown, "
-            "top providers, generational profile, cross-category overlap"
+            "top providers, generational profile, cross-category overlap, "
+            "opportunity scoring, category affinity"
         ),
         "sections": sections,
         "sheets": sheets,
@@ -533,5 +556,244 @@ def _cross_category_analysis(fs_df):
         "narrative": narrative,
         "figures": [fig],
         "tables": tables,
+    }
+    return section, sheet
+
+
+# =============================================================================
+# Analysis 7: FinServ Opportunity Scoring
+# =============================================================================
+
+
+def _opportunity_scoring(fs_df):
+    """Account-level opportunity scoring with value tier and recency segmentation.
+
+    Builds a per-account summary with total spend, transaction count, average
+    transaction, categories used, last transaction date, and recency in days.
+    Segments accounts by Value Tier and Recency for prioritisation.
+    """
+    # Ensure transaction_date is datetime
+    txn_dates = pd.to_datetime(fs_df["transaction_date"], errors="coerce")
+
+    acct_agg = fs_df.assign(transaction_date=txn_dates).groupby("primary_account_num").agg(
+        Total_FinServ_Spend=("amount", "sum"),
+        Transaction_Count=("amount", "count"),
+        Avg_Transaction=("amount", "mean"),
+        Categories_Used=("finserv_category", "nunique"),
+        Categories=("finserv_category", lambda x: ", ".join(sorted(x.unique()))),
+        Last_Transaction=("transaction_date", "max"),
+    )
+    acct_agg["Avg_Transaction"] = acct_agg["Avg_Transaction"].round(2)
+
+    reference_date = acct_agg["Last_Transaction"].max()
+    acct_agg["Recency_Days"] = (reference_date - acct_agg["Last_Transaction"]).dt.days
+
+    # Value Tier assignment
+    acct_agg["Value Tier"] = np.where(
+        acct_agg["Total_FinServ_Spend"] > _HIGH_VALUE_THRESHOLD,
+        "High Value",
+        np.where(
+            acct_agg["Total_FinServ_Spend"] >= _MEDIUM_VALUE_THRESHOLD,
+            "Medium Value",
+            "Lower Value",
+        ),
+    )
+
+    # Recency assignment
+    acct_agg["Recency"] = np.where(
+        acct_agg["Recency_Days"] <= _ACTIVE_DAYS,
+        "Active",
+        np.where(
+            acct_agg["Recency_Days"] <= _RECENT_DAYS,
+            "Recent",
+            "Inactive",
+        ),
+    )
+
+    # Distribution table: Value Tier x Recency
+    tier_order = ["High Value", "Medium Value", "Lower Value"]
+    recency_order = ["Active", "Recent", "Inactive"]
+    pivot = (
+        acct_agg.groupby(["Value Tier", "Recency"])
+        .size()
+        .reset_index(name="Accounts")
+    )
+    dist_table = pivot.pivot_table(
+        index="Value Tier",
+        columns="Recency",
+        values="Accounts",
+        fill_value=0,
+        aggfunc="sum",
+    )
+    # Reindex to guarantee consistent order (only present tiers/recencies)
+    dist_table = dist_table.reindex(
+        index=[t for t in tier_order if t in dist_table.index],
+        columns=[r for r in recency_order if r in dist_table.columns],
+        fill_value=0,
+    )
+
+    # Horizontal bar chart: accounts by Value Tier
+    tier_counts = (
+        acct_agg["Value Tier"]
+        .value_counts()
+        .reindex(tier_order, fill_value=0)
+        .reset_index()
+    )
+    tier_counts.columns = ["Value Tier", "Accounts"]
+
+    fig = horizontal_bar(
+        tier_counts,
+        x_col="Accounts",
+        y_col="Value Tier",
+        title="FinServ Accounts by Value Tier",
+        top_n=len(tier_counts),
+        value_format="{:,.0f}",
+        color=COLORS["primary"],
+    )
+    fig.update_layout(
+        title=insight_title(
+            "FinServ Opportunity Scoring",
+            "Account segmentation by spend value tier",
+        )
+    )
+
+    # Narrative
+    high_active = 0
+    inactive_total = 0
+    if "High Value" in dist_table.index and "Active" in dist_table.columns:
+        high_active = int(dist_table.loc["High Value", "Active"])
+    if "Inactive" in dist_table.columns:
+        inactive_total = int(dist_table["Inactive"].sum())
+
+    narrative = (
+        f"<b>{high_active:,}</b> high-value accounts are currently active. "
+        f"<b>{inactive_total:,}</b> accounts are inactive (90+ days) "
+        f"and may need re-engagement outreach."
+    )
+
+    # Sheet: top 50 accounts by spend
+    sheet_df = (
+        acct_agg.sort_values("Total_FinServ_Spend", ascending=False)
+        .head(50)
+        .reset_index()
+        .rename(
+            columns={
+                "primary_account_num": "Account",
+                "Total_FinServ_Spend": "Total FinServ Spend",
+                "Transaction_Count": "Transaction Count",
+                "Avg_Transaction": "Avg Transaction",
+                "Categories_Used": "Categories Used",
+                "Last_Transaction": "Last Transaction",
+                "Recency_Days": "Recency (Days)",
+            }
+        )
+    )
+
+    section = {
+        "heading": "FinServ Opportunity Scoring",
+        "narrative": narrative,
+        "figures": [fig],
+        "tables": [("Opportunity Scoring: Value Tier x Recency", dist_table.reset_index())],
+    }
+    sheet = {
+        "name": "S4 Opportunity Scoring",
+        "df": sheet_df,
+        "currency_cols": ["Total FinServ Spend", "Avg Transaction"],
+        "pct_cols": [],
+        "number_cols": ["Transaction Count", "Categories Used", "Recency (Days)"],
+    }
+    return section, sheet
+
+
+# =============================================================================
+# Analysis 8: Category Affinity Matrix
+# =============================================================================
+
+
+def _category_affinity_matrix(fs_df):
+    """Co-occurrence matrix for accounts using 2+ FinServ categories.
+
+    For each pair of categories, counts how many accounts use both.
+    Returns None if fewer than 2 categories have overlapping accounts.
+    """
+    # Build account-to-categories mapping
+    acct_cats = fs_df.groupby("primary_account_num")["finserv_category"].apply(set)
+
+    # Keep only accounts with 2+ categories
+    multi_accts = acct_cats[acct_cats.apply(len) >= 2]
+    if multi_accts.empty:
+        return None
+
+    all_categories = sorted(fs_df["finserv_category"].unique())
+    if len(all_categories) < 2:
+        return None
+
+    # Build the co-occurrence matrix
+    matrix = pd.DataFrame(0, index=all_categories, columns=all_categories)
+    for cats in multi_accts:
+        cat_list = sorted(cats)
+        for i, cat_a in enumerate(cat_list):
+            for cat_b in cat_list[i + 1:]:
+                matrix.loc[cat_a, cat_b] += 1
+                matrix.loc[cat_b, cat_a] += 1
+
+    # Set diagonal to per-category account counts (total accounts in each category)
+    for cat in all_categories:
+        matrix.loc[cat, cat] = int(acct_cats.apply(lambda s: cat in s).sum())
+
+    # Drop categories with zero co-occurrences (all off-diagonal zeros)
+    off_diag_sums = matrix.sum(axis=1) - np.diag(matrix.values)
+    active_cats = [c for c, s in zip(all_categories, off_diag_sums) if s > 0]
+    if len(active_cats) < 2:
+        return None
+
+    matrix = matrix.loc[active_cats, active_cats]
+
+    # Heatmap
+    fig = heatmap(
+        matrix,
+        title="Category Affinity Matrix",
+        colorscale="Blues",
+        fmt=".0f",
+    )
+    fig.update_layout(
+        title=insight_title(
+            "Category Affinity Matrix",
+            "Co-occurrence of FinServ categories across accounts",
+        )
+    )
+
+    # Find strongest off-diagonal pair
+    best_val = 0
+    best_pair = ("", "")
+    for i, cat_a in enumerate(active_cats):
+        for cat_b in active_cats[i + 1:]:
+            val = matrix.loc[cat_a, cat_b]
+            if val > best_val:
+                best_val = val
+                best_pair = (cat_a, cat_b)
+
+    narrative = (
+        f"<b>{best_pair[0]} + {best_pair[1]}</b> is the most common combination "
+        f"with <b>{int(best_val):,}</b> accounts using both categories."
+        if best_val > 0
+        else "No significant category co-occurrences were found."
+    )
+
+    # Prepare sheet-friendly version (reset index for export)
+    sheet_df = matrix.reset_index().rename(columns={"index": "Category"})
+
+    section = {
+        "heading": "Category Affinity Matrix",
+        "narrative": narrative,
+        "figures": [fig],
+        "tables": [("Affinity Matrix", sheet_df)],
+    }
+    sheet = {
+        "name": "S4 Affinity Matrix",
+        "df": sheet_df,
+        "currency_cols": [],
+        "pct_cols": [],
+        "number_cols": [c for c in sheet_df.columns if c != "Category"],
     }
     return section, sheet
