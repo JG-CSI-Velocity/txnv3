@@ -108,7 +108,13 @@ def run(ctx: dict) -> dict:
     }
     if payroll_df.empty:
         sections.append({"heading": "Payroll Detection",
-                         "narrative": "No payroll transactions were detected.",
+                         "narrative": (
+                             "No payroll transactions were detected in the transaction data. "
+                             "Payroll detection searches for known processor keywords "
+                             "(ADP, PAYCHEX, INTUIT, BAMBOOHR, GUSTO, etc.) in merchant names. "
+                             "This dataset contains debit card purchase transactions; payroll "
+                             "deposits typically appear in credit/deposit data."
+                         ),
                          "figures": [], "tables": []})
         return empty_result
 

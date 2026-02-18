@@ -266,9 +266,9 @@ def _inactive(odd, sections, sheets):
                                 marker_color=CATEGORY_PALETTE[:len(tc)]))
         fig.update_layout(title="Inactive Accounts by Balance Tier", showlegend=False)
     else:
-        fig = go.Figure()
-        fig.update_layout(title="Inactive Accounts")
-    fig = apply_theme(fig)
+        fig = None
+    if fig is not None:
+        fig = apply_theme(fig)
 
     total, cnt = len(odd), len(inactive)
     pct = _sdiv(cnt, total) * 100
@@ -293,7 +293,8 @@ def _inactive(odd, sections, sheets):
         "narrative": (f"<b>{cnt:,}</b> accounts (<b>{pct:.1f}%</b>) are inactive ({criteria}). "
                       f"These represent a reactivation opportunity -- targeted campaigns could drive "
                       f"incremental interchange revenue and deepen engagement."),
-        "figures": [fig], "tables": [("Inactive Accounts", tbl)],
+        "figures": [f for f in [fig] if f is not None],
+        "tables": [("Inactive Accounts", tbl)],
     })
     sheets.append({"name": "S6 Inactive Accounts", "df": tbl,
                     "currency_cols": [], "pct_cols": pcols, "number_cols": ncols})

@@ -2,9 +2,37 @@
 # HTML dashboard generator - self-contained interactive Plotly dashboards
 # =============================================================================
 
+import pandas as pd
 import plotly.graph_objects as go
 from pathlib import Path
 from datetime import datetime
+
+# Keywords that identify currency columns in HTML tables
+_CURRENCY_KEYWORDS = {
+    "spend", "revenue", "payroll", "balance", "amount", "value", "cost",
+    "total", "avg", "median", "interchange", "winback", "annual",
+}
+_PCT_KEYWORDS = {"%", "pct", "rate", "penetration", "recapture"}
+
+
+def _format_table_for_html(table_df: pd.DataFrame) -> pd.DataFrame:
+    """Format numeric columns for display in HTML tables."""
+    display = table_df.copy()
+    for col in display.columns:
+        col_lower = col.lower()
+        is_currency = any(kw in col_lower for kw in _CURRENCY_KEYWORDS)
+        is_pct = any(kw in col_lower for kw in _PCT_KEYWORDS)
+        if is_currency and not is_pct:
+            if display[col].dtype in ("float64", "int64", "float32", "int32"):
+                display[col] = display[col].apply(
+                    lambda v: f"${v:,.2f}" if pd.notna(v) else ""
+                )
+        elif is_pct:
+            if display[col].dtype in ("float64", "int64", "float32", "int32"):
+                display[col] = display[col].apply(
+                    lambda v: f"{v:.1f}%" if pd.notna(v) else ""
+                )
+    return display
 
 
 def generate_html_report(storyline_results: dict, config: dict, output_path: str):
@@ -62,6 +90,10 @@ def generate_html_report(storyline_results: dict, config: dict, output_path: str
                 )
 
             for fig in section.get("figures", []):
+                if fig is None:
+                    continue
+                if not fig.data and not fig.layout.annotations:
+                    continue
                 chart_html = fig.to_html(
                     full_html=False,
                     include_plotlyjs=False,
@@ -72,7 +104,8 @@ def generate_html_report(storyline_results: dict, config: dict, output_path: str
             for table_title, table_df in section.get("tables", []):
                 section_html += f'<h4>{table_title}</h4>\n'
                 section_html += '<div class="table-container">\n'
-                section_html += table_df.to_html(
+                display_df = _format_table_for_html(table_df)
+                section_html += display_df.to_html(
                     classes="data-table",
                     index=False,
                     border=0,

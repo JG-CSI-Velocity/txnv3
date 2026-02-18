@@ -20,6 +20,14 @@ CURRENCY_FORMAT = '#,##0'
 CURRENCY_CENTS_FORMAT = '#,##0.00'
 PERCENT_FORMAT = '0.0"%"'
 NUMBER_FORMAT = '#,##0'
+
+# Columns that should show decimal cents (Avg, Median, per-unit metrics)
+_CENTS_KEYWORDS = {
+    "avg", "average", "median", "per employee", "per account",
+    "per card", "ticket", "revenue at risk", "winback revenue",
+    "est. annual revenue", "first 3m avg", "last 3m avg",
+    "avg monthly", "interchange",
+}
 THIN_BORDER = Border(
     bottom=Side(style="thin", color="E2E8F0"),
 )
@@ -118,7 +126,11 @@ def generate_excel_report(storyline_results: dict, config: dict, output_path: st
 
                     # Apply number formats
                     if col_name in currency_cols:
-                        cell.number_format = CURRENCY_FORMAT
+                        col_lower = col_name.lower()
+                        if any(kw in col_lower for kw in _CENTS_KEYWORDS):
+                            cell.number_format = CURRENCY_CENTS_FORMAT
+                        else:
+                            cell.number_format = CURRENCY_FORMAT
                     elif col_name in pct_cols:
                         cell.number_format = PERCENT_FORMAT
                     elif col_name in number_cols:

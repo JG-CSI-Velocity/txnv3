@@ -924,8 +924,11 @@ def run(ctx: dict) -> dict:
             "sections": [{
                 "heading": "Campaign Effectiveness",
                 "narrative": (
-                    "No campaign data available. The ODD file does not contain "
-                    "campaign-related columns (# of Offers, MmmYY Mail)."
+                    "The ODD file does not contain campaign response columns "
+                    "(e.g., <b># of Offers</b>, <b>MmmYY Mail</b> date columns). "
+                    "To enable campaign effectiveness analysis, ensure the ODD "
+                    "includes campaign mail dates and offer counts per account. "
+                    "This is a data availability issue, not an error."
                 ),
                 "figures": [], "tables": [],
             }],

@@ -295,7 +295,7 @@ def run(ctx: dict) -> dict:
                     "months for personal accounts. Also highlights merchants "
                     "with the largest absolute spend increases."
                 ),
-                "figures": [per_climb_fig, per_fall_fig, per_spend_fig],
+                "figures": [f for f in [per_climb_fig, per_fall_fig, per_spend_fig] if f is not None],
                 "tables": [("Per Rank Movers", per_mover_df.head(30))],
             })
             sheets.append({
@@ -1103,9 +1103,7 @@ def _personal_rank_movers(subset_df, merch_col):
                 })
 
     if not spend_rows:
-        empty_fig = go.Figure()
-        empty_fig = apply_theme(empty_fig)
-        return mover_df, climb_fig, fall_fig, empty_fig
+        return mover_df, climb_fig, fall_fig, None
 
     spend_df = pd.DataFrame(spend_rows).sort_values(
         "Spend Change", ascending=False

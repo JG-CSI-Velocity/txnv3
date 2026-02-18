@@ -644,7 +644,7 @@ def _pin_sig_mix(df):
 def _balance_distribution(odd):
     bal = odd["Avg Bal"].dropna()
     if bal.empty:
-        return pd.DataFrame(), go.Figure()
+        return None
 
     bins = [float("-inf"), 0, 500, 2000, 10000, 50000, float("inf")]
     labels = ["Negative", "$0-500", "$500-2K", "$2K-10K", "$10K-50K", "$50K+"]

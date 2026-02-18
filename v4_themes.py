@@ -307,7 +307,14 @@ def lollipop_chart(
     n = len(labels)
 
     if n == 0:
-        return go.Figure()
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No data available", xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="#8B95A2"),
+        )
+        fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), height=200)
+        return fig
 
     accent_n = min(accent_n, n)
     colors = [COLORS["neutral"]] * (n - accent_n) + [dot_color] * accent_n
@@ -803,7 +810,14 @@ def waterfall_chart(
 
     n = len(categories)
     if n == 0:
-        return go.Figure()
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No data available", xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="#8B95A2"),
+        )
+        fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False), height=200)
+        return fig
 
     # Determine measure types: last is 'total', rest are 'relative'
     measures = ["relative"] * (n - 1) + ["total"]
