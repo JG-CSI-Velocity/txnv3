@@ -338,9 +338,9 @@ with st.sidebar:
         st.markdown("##### CLIENT")
         id_col, name_col = st.columns(2)
         with id_col:
-            client_id = st.text_input("ID", value="0000")
+            client_id = st.text_input("ID", value="", placeholder="e.g. 1453")
         with name_col:
-            client_name = st.text_input("Name", value="Client")
+            client_name = st.text_input("Name", value="", placeholder="e.g. Connex CU")
 
         st.markdown("##### STORYLINES")
         all_on = st.checkbox("Select all", value=True, key="select_all")
@@ -392,6 +392,12 @@ if not odd_path.strip():
     errors.append("ODD file path is required.")
 elif not Path(odd_path.strip()).exists():
     errors.append(f"ODD file not found: `{odd_path.strip()}`")
+
+if not client_id.strip():
+    errors.append("Client ID is required.")
+
+if not client_name.strip():
+    errors.append("Client Name is required.")
 
 if not selected:
     errors.append("Select at least one storyline.")
