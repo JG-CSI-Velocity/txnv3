@@ -51,8 +51,31 @@ _CSS = """
 }
 
 /* Global */
-.stApp { background: var(--surface); }
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+.stApp { background: var(--surface); color: var(--text); }
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
+    color: var(--text);
+}
+
+/* Force light text on dark background for all Streamlit elements */
+.stMarkdown, .stMarkdown p, .stMarkdown li,
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4,
+.stMarkdown h5, .stMarkdown h6 { color: var(--text); }
+p, span, div, label, li { color: var(--text); }
+.stTextInput label, .stSelectbox label, .stCheckbox label,
+.stRadio label, .stMultiSelect label { color: var(--muted) !important; }
+.stTextInput input, .stSelectbox select {
+    color: var(--text) !important;
+    background: var(--card) !important;
+    border-color: var(--border) !important;
+}
+input, textarea { color: var(--text) !important; }
+.stSelectbox > div > div { color: var(--text) !important; }
+[data-baseweb="select"] { color: var(--text) !important; }
+[data-baseweb="select"] * { color: var(--text) !important; }
+[data-baseweb="input"] input { color: var(--text) !important; }
+.stCheckbox span { color: var(--text) !important; }
+.stAlert p { color: inherit; }
 
 /* Sidebar */
 section[data-testid="stSidebar"] {
