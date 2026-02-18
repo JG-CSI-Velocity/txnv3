@@ -31,9 +31,16 @@ def generate_html_report(storyline_results: dict, config: dict, output_path: str
     client_id = config.get("client_id", "")
     generated = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 
+    # Order keys: s0_executive first, then the rest in original order
+    ordered_keys = []
+    if "s0_executive" in storyline_results:
+        ordered_keys.append("s0_executive")
+    ordered_keys.extend(k for k in storyline_results if k != "s0_executive")
+
     # Build sidebar nav
     nav_items = []
-    for key, result in storyline_results.items():
+    for key in ordered_keys:
+        result = storyline_results[key]
         nav_items.append(
             f'<a href="#{key}" class="nav-link">{result["title"]}</a>'
         )
@@ -41,7 +48,8 @@ def generate_html_report(storyline_results: dict, config: dict, output_path: str
 
     # Build content sections
     content_sections = []
-    for key, result in storyline_results.items():
+    for key in ordered_keys:
+        result = storyline_results[key]
         section_html = f'<div id="{key}" class="storyline-section">\n'
         section_html += f'<h2 class="storyline-title">{result["title"]}</h2>\n'
 
@@ -308,6 +316,31 @@ h4 {{
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}}
+
+/* Executive summary styling */
+#s0_executive .storyline-title {{
+    font-size: 24px;
+    border-bottom-color: var(--accent);
+    border-bottom-width: 3px;
+}}
+
+#s0_executive .narrative {{
+    border-left-color: var(--primary);
+    border-left-width: 4px;
+    font-size: 15px;
+}}
+
+#s0_executive .narrative p {{
+    margin: 8px 0;
+}}
+
+#s0_executive .narrative ul {{
+    margin: 8px 0 8px 20px;
+}}
+
+#s0_executive .narrative li {{
+    margin: 6px 0;
 }}
 
 /* Responsive */

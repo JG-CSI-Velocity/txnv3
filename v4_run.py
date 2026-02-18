@@ -29,6 +29,7 @@ import v4_s6_risk as s6
 import v4_s7_campaigns as s7
 import v4_s8_payroll as s8
 import v4_s9_lifecycle as s9
+import v4_s0_executive as s0
 
 ALL_STORYLINES = [
     ("s1_portfolio", s1),
@@ -46,6 +47,7 @@ ALL_STORYLINES = [
 
 # Public mapping for the Streamlit app to look up labels
 STORYLINE_LABELS: dict[str, str] = {
+    "s0_executive": "S0: Executive Summary",
     "s1_portfolio": "S1: Portfolio Health",
     "s2_merchant": "S2: Merchant Intelligence",
     "s3_competition": "S3: Competitive Landscape",
@@ -117,6 +119,17 @@ def run_pipeline(
                 "sections": [],
                 "sheets": [],
             }
+
+    # Executive summary runs last, receives all results for cross-storyline synthesis
+    try:
+        s0_result = s0.run(ctx, results)
+        results["s0_executive"] = s0_result
+    except Exception as e:
+        results["s0_executive"] = {
+            "title": "Executive Summary",
+            "description": f"Error: {e}",
+            "sections": [], "sheets": [],
+        }
 
     # Generate reports
     if progress_cb:

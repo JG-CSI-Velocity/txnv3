@@ -34,7 +34,7 @@ def run(ctx: dict) -> dict:
     _stage5_daily_banking(odd, df, sections, sheets)
     _stage6_expansion(df, ctx, sections, sheets)
     _stage7_retention(odd, df, sections, sheets)
-    _stage8_attrition(odd, df, sections, sheets)
+    _stage8_attrition(odd, df, ctx, sections, sheets)
 
     return {
         "title": "S9: Lifecycle Management",
@@ -537,9 +537,12 @@ def _stage7_retention(odd, df, sections, sheets):
 # Stage 8: Attrition & Recovery
 # =============================================================================
 
-def _stage8_attrition(odd, df, sections, sheets):
+def _stage8_attrition(odd, df, ctx, sections, sheets):
     if "year_month" not in df.columns:
         return
+
+    config = ctx.get("config", {})
+    interchange_rate = config.get("interchange_rate", 0.015)
 
     sorted_months = sorted(df["year_month"].unique())
     if len(sorted_months) < 3:
@@ -585,9 +588,9 @@ def _stage8_attrition(odd, df, sections, sheets):
     class_dist["% of Total"] = (class_dist["Accounts"] / class_dist["Accounts"].sum() * 100).round(1)
 
     # Revenue at risk: declining + dormant annual spend projected from prev
-    at_risk = acct[acct["lifecycle"].isin(["Declining", "Dormant"])]
-    annual_at_risk = at_risk["prev_spend"].sum() * (12 / max(len(prev_3), 1))
-    interchange_risk = annual_at_risk * 0.005  # ~50 bps interchange
+    at_risk_accts = acct[acct["lifecycle"].isin(["Declining", "Dormant"])]
+    annual_at_risk = at_risk_accts["prev_spend"].sum() * (12 / max(len(prev_3), 1))
+    interchange_risk = annual_at_risk * interchange_rate
 
     # Waterfall chart: lifecycle flow
     labels = ["Growing", "Stable", "Declining", "Dormant", "Lost"]
@@ -596,7 +599,6 @@ def _stage8_attrition(odd, df, sections, sheets):
         row = class_dist[class_dist["Lifecycle Stage"] == l]
         values.append(int(row["Accounts"].iloc[0]) if not row.empty else 0)
 
-    wf_df = pd.DataFrame({"Stage": labels, "Accounts": values})
     wf_labels = labels + ["Total"]
     wf_values = values + [sum(values)]
     wf_fig = apply_theme(waterfall_chart(
@@ -636,4 +638,286 @@ def _stage8_attrition(odd, df, sections, sheets):
     sheets.append({
         "name": "S9 Attrition", "df": class_dist,
         "pct_cols": ["% of Total"], "number_cols": ["Accounts"],
+    })
+
+    # --- Enhanced attrition sub-analyses ---
+    _attrition_risk_scoring(odd, df, acct, sections, sheets)
+    _attrition_competitor_xref(acct, ctx, sections, sheets)
+    _attrition_revenue_impact(acct, config, sections, sheets)
+
+
+# =============================================================================
+# Attrition Enhancement: Risk Scoring
+# =============================================================================
+
+def _attrition_risk_scoring(odd, df, acct, sections, sheets):
+    """Score each account 0-100 based on weighted attrition signals."""
+    if acct.empty:
+        return
+
+    scores = acct[["recent_spend", "prev_spend", "change_pct", "lifecycle"]].copy()
+
+    # Signal 1: Months since last transaction (weight 25)
+    last_txn = df.groupby("primary_account_num")["transaction_date"].max()
+    max_date = df["transaction_date"].max()
+    months_inactive = ((max_date - last_txn).dt.days / 30).clip(upper=12)
+    scores["inactivity_score"] = months_inactive.reindex(scores.index).fillna(12)
+    scores["inactivity_score"] = (scores["inactivity_score"] / 12 * 25).round(1)
+
+    # Signal 2: MoM spend decline (weight 25)
+    scores["decline_score"] = np.where(
+        scores["change_pct"] < 0,
+        np.minimum(abs(scores["change_pct"]) / 100, 1.0) * 25,
+        0,
+    )
+
+    # Signal 3: Below-avg balance (weight 15)
+    if "Avg Bal" in odd.columns and "Acct Number" in odd.columns:
+        bal = odd.set_index("Acct Number")["Avg Bal"]
+        median_bal = bal.median()
+        acct_bal = bal.reindex(scores.index).fillna(0)
+        scores["balance_score"] = np.where(
+            (median_bal > 0) & (acct_bal < median_bal),
+            (1 - acct_bal / median_bal).clip(upper=1.0) * 15,
+            0,
+        )
+    else:
+        scores["balance_score"] = 0
+
+    # Signal 4: Account age < 12 months (weight 15)
+    if "Date Opened" in odd.columns and "Acct Number" in odd.columns:
+        opened = odd.set_index("Acct Number")["Date Opened"]
+        days_open = (max_date - opened.reindex(scores.index)).dt.days.fillna(9999)
+        scores["new_acct_score"] = np.where(
+            days_open < 365, (1 - days_open / 365) * 15, 0,
+        )
+    else:
+        scores["new_acct_score"] = 0
+
+    # Signal 5: Competitor activity placeholder (weight 20, filled if S3 data exists)
+    scores["competitor_score"] = 0  # populated in _attrition_competitor_xref
+
+    scores["risk_score"] = (
+        scores["inactivity_score"]
+        + scores["decline_score"]
+        + scores["balance_score"]
+        + scores["new_acct_score"]
+        + scores["competitor_score"]
+    ).round(0).astype(int).clip(upper=100)
+
+    # Risk tiers
+    scores["risk_tier"] = pd.cut(
+        scores["risk_score"],
+        bins=[-1, 25, 50, 75, 100],
+        labels=["Low", "Medium", "High", "Critical"],
+    )
+
+    tier_dist = scores["risk_tier"].value_counts().reindex(
+        ["Critical", "High", "Medium", "Low"]
+    ).fillna(0).astype(int).reset_index()
+    tier_dist.columns = ["Risk Tier", "Accounts"]
+    tier_dist["% of Total"] = (
+        tier_dist["Accounts"] / max(tier_dist["Accounts"].sum(), 1) * 100
+    ).round(1)
+
+    colors = {
+        "Critical": COLORS["negative"],
+        "High": COLORS["accent"],
+        "Medium": COLORS["neutral"],
+        "Low": COLORS["positive"],
+    }
+    bar_colors = [colors.get(t, COLORS["neutral"]) for t in tier_dist["Risk Tier"]]
+
+    fig = go.Figure(go.Bar(
+        x=tier_dist["Risk Tier"],
+        y=tier_dist["Accounts"],
+        marker_color=bar_colors,
+        text=tier_dist["Accounts"].apply(lambda v: f"{v:,}"),
+        textposition="outside",
+        textfont=dict(size=11),
+        hovertemplate="%{x}: %{y:,} accounts<extra></extra>",
+    ))
+    fig.update_layout(
+        title=insight_title(
+            "Attrition Risk Distribution",
+            "Accounts scored 0-100 based on inactivity, spend decline, balance, and account age",
+        ),
+        yaxis=dict(title=None), showlegend=False, height=450,
+    )
+    apply_theme(fig)
+
+    critical = int(tier_dist.loc[tier_dist["Risk Tier"] == "Critical", "Accounts"].sum())
+    high = int(tier_dist.loc[tier_dist["Risk Tier"] == "High", "Accounts"].sum())
+    narr = (
+        f"<b>{critical + high:,}</b> accounts are at high or critical attrition risk. "
+        f"<b>{critical:,}</b> critical-risk accounts require immediate outreach."
+    )
+
+    sections.append({
+        "heading": "Attrition Risk Scoring",
+        "narrative": narr,
+        "figures": [fig],
+        "tables": [("Risk Tier Distribution", tier_dist)],
+    })
+    sheets.append({
+        "name": "S9 Risk Scores", "df": tier_dist,
+        "pct_cols": ["% of Total"], "number_cols": ["Accounts"],
+    })
+
+
+# =============================================================================
+# Attrition Enhancement: Competitor Cross-Reference
+# =============================================================================
+
+def _attrition_competitor_xref(acct, ctx, sections, sheets):
+    """Cross-reference at-risk accounts with S3 competitor transaction data."""
+    s3_tagged = ctx.get("s3_tagged_df")
+    if s3_tagged is None or s3_tagged.empty:
+        return
+
+    at_risk_ids = set(
+        acct[acct["lifecycle"].isin(["Declining", "Dormant", "Lost"])].index
+    )
+    if not at_risk_ids:
+        return
+
+    comp_col = None
+    for col in ["competitor_category", "competitor_name", "competitor"]:
+        if col in s3_tagged.columns:
+            comp_col = col
+            break
+    if comp_col is None:
+        return
+
+    comp_accts = set(s3_tagged["primary_account_num"].unique())
+    overlap = at_risk_ids & comp_accts
+    no_overlap = at_risk_ids - comp_accts
+
+    if not overlap:
+        return
+
+    overlap_df = s3_tagged[s3_tagged["primary_account_num"].isin(overlap)]
+
+    # Top competitors stealing at-risk accounts
+    top_comp = (
+        overlap_df.groupby(comp_col)
+        .agg(
+            accounts=("primary_account_num", "nunique"),
+            spend=("amount", "sum"),
+        )
+        .sort_values("spend", ascending=False)
+        .head(10)
+        .reset_index()
+    )
+    top_comp.columns = ["Competitor", "At-Risk Accounts", "Spend to Competitor"]
+
+    fig = donut_chart(
+        labels=["With Competitor Activity", "No Competitor Activity"],
+        values=[len(overlap), len(no_overlap)],
+        title="At-Risk Accounts: Competitor Activity",
+        colors=[COLORS["negative"], COLORS["neutral"]],
+    )
+    apply_theme(fig)
+
+    pct_w_comp = len(overlap) / max(len(at_risk_ids), 1) * 100
+    narr = (
+        f"<b>{len(overlap):,}</b> of <b>{len(at_risk_ids):,}</b> at-risk accounts "
+        f"(<b>{pct_w_comp:.1f}%</b>) are actively transacting with competitors. "
+        f"Top competitor: <b>{top_comp.iloc[0]['Competitor']}</b> with "
+        f"{top_comp.iloc[0]['At-Risk Accounts']:,} at-risk accounts."
+    ) if not top_comp.empty else ""
+
+    sections.append({
+        "heading": "Attrition: Competitor Cross-Reference",
+        "narrative": narr,
+        "figures": [fig],
+        "tables": [("Top Competitors (At-Risk Accounts)", top_comp)],
+    })
+    sheets.append({
+        "name": "S9 Attrition Competitors", "df": top_comp,
+        "currency_cols": ["Spend to Competitor"],
+        "number_cols": ["At-Risk Accounts"],
+    })
+
+
+# =============================================================================
+# Attrition Enhancement: Revenue Impact & Winback Sizing
+# =============================================================================
+
+def _attrition_revenue_impact(acct, config, sections, sheets):
+    """Quantify revenue at risk and winback opportunity by risk tier."""
+    if acct.empty:
+        return
+
+    interchange_rate = config.get("interchange_rate", 0.015)
+    at_risk = acct[acct["lifecycle"].isin(["Declining", "Dormant"])].copy()
+    if at_risk.empty:
+        return
+
+    # Annualize from 3-month prev_spend window
+    at_risk["annual_spend_est"] = at_risk["prev_spend"] * 4
+
+    # Risk tiers based on decline severity
+    at_risk["risk_tier"] = pd.cut(
+        at_risk["change_pct"],
+        bins=[-np.inf, -75, -50, -25, 0],
+        labels=["Critical", "High", "Medium", "Low"],
+    )
+
+    tier_summary = (
+        at_risk.groupby("risk_tier", observed=False)
+        .agg(
+            accounts=("annual_spend_est", "count"),
+            annual_spend=("annual_spend_est", "sum"),
+        )
+        .reset_index()
+    )
+    tier_summary["revenue_at_risk"] = (tier_summary["annual_spend"] * interchange_rate).round(2)
+
+    # Winback assumptions: Critical 10%, High 20%, Medium 35%, Low 50%
+    winback_rates = {"Critical": 0.10, "High": 0.20, "Medium": 0.35, "Low": 0.50}
+    tier_summary["winback_rate"] = tier_summary["risk_tier"].map(winback_rates).fillna(0.25)
+    tier_summary["winback_revenue"] = (
+        tier_summary["revenue_at_risk"] * tier_summary["winback_rate"]
+    ).round(2)
+
+    tier_summary.columns = [
+        "Risk Tier", "Accounts", "Annual Spend", "Revenue at Risk",
+        "Winback Rate", "Winback Revenue",
+    ]
+    tier_summary["Winback Rate"] = (tier_summary["Winback Rate"] * 100).round(0).astype(int)
+
+    # Summary bar chart
+    fig = grouped_bar(
+        tier_summary,
+        x_col="Risk Tier",
+        y_cols=["Revenue at Risk", "Winback Revenue"],
+        title="Revenue at Risk vs Winback Opportunity by Tier",
+        colors=[COLORS["negative"], COLORS["positive"]],
+    )
+    fig.update_layout(
+        yaxis=dict(tickprefix="$", tickformat=","),
+        height=450,
+    )
+    apply_theme(fig)
+
+    total_risk = tier_summary["Revenue at Risk"].sum()
+    total_winback = tier_summary["Winback Revenue"].sum()
+    narr = (
+        f"Total interchange revenue at risk: <b>{format_currency(total_risk)}</b>/yr "
+        f"across <b>{tier_summary['Accounts'].sum():,}</b> declining/dormant accounts. "
+        f"Estimated winback opportunity: <b>{format_currency(total_winback)}</b>/yr "
+        f"based on tier-specific recovery rates (10-50%)."
+    )
+
+    sections.append({
+        "heading": "Attrition: Revenue Impact & Winback Sizing",
+        "narrative": narr,
+        "figures": [fig],
+        "tables": [("Revenue Impact by Risk Tier", tier_summary)],
+    })
+    sheets.append({
+        "name": "S9 Revenue Impact", "df": tier_summary,
+        "currency_cols": ["Annual Spend", "Revenue at Risk", "Winback Revenue"],
+        "pct_cols": [], "number_cols": ["Accounts", "Winback Rate"],
     })

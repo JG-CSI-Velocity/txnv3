@@ -71,8 +71,6 @@ def _detect_payroll(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     pay_cfg = config.get("payroll", {})
     processors: list[str] = pay_cfg.get("processors", ["PAYROLL"])
     skip_terms = [t.upper() for t in pay_cfg.get("skip_terms", [])]
-    min_spend: float = pay_cfg.get("min_spend", 10_000)
-    max_match: int = pay_cfg.get("max_match_count", 1_000)
 
     merch_upper = df["merchant_consolidated"].str.upper()
     matched = pd.Series(False, index=df.index)
@@ -93,17 +91,6 @@ def _detect_payroll(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 
     payroll_df = df.loc[matched].copy()
     payroll_df["payroll_employer"] = labels.loc[matched]
-
-    if min_spend > 0:
-        stats = df.groupby("merchant_consolidated").agg(
-            total=("amount", "sum"), accts=("primary_account_num", "nunique"),
-        )
-        cands = stats[(stats["total"] >= min_spend) & (stats["accts"] <= max_match)].index
-        extra_mask = df["merchant_consolidated"].isin(cands) & ~df.index.isin(payroll_df.index)
-        if extra_mask.any():
-            extra = df.loc[extra_mask].copy()
-            extra["payroll_employer"] = extra["merchant_consolidated"].str.upper()
-            payroll_df = pd.concat([payroll_df, extra], ignore_index=True)
     return payroll_df
 
 

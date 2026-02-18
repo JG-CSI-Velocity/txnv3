@@ -48,8 +48,15 @@ def generate_excel_report(storyline_results: dict, config: dict, output_path: st
     # Remove default sheet
     wb.remove(wb.active)
 
+    # Order keys: s0_executive first, then the rest in original order
+    ordered_keys = []
+    if "s0_executive" in storyline_results:
+        ordered_keys.append("s0_executive")
+    ordered_keys.extend(k for k in storyline_results if k != "s0_executive")
+
     sheet_count = 0
-    for key, result in storyline_results.items():
+    for key in ordered_keys:
+        result = storyline_results[key]
         for sheet_info in result.get("sheets", []):
             sheet_name = sheet_info["name"][:31]
             df = sheet_info["df"]
@@ -182,7 +189,12 @@ def _add_overview_sheet(wb, storyline_results, config, sheet_count):
         cell.alignment = HEADER_ALIGN
 
     row += 1
-    for key, result in storyline_results.items():
+    overview_keys = []
+    if "s0_executive" in storyline_results:
+        overview_keys.append("s0_executive")
+    overview_keys.extend(k for k in storyline_results if k != "s0_executive")
+    for key in overview_keys:
+        result = storyline_results[key]
         sheet_names = [s["name"] for s in result.get("sheets", [])]
         ws.cell(row=row, column=1, value=result["title"]).font = Font(
             name="Calibri", size=10, bold=True
