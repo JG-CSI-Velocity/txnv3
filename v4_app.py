@@ -1,14 +1,15 @@
-"""V4 Transaction Analysis - Streamlit Launcher.
+"""V4 Transaction Analysis - Analyst Workbench.
 
 Run:  streamlit run v4_app.py
 """
 from __future__ import annotations
 
+import re
 import sys
+import time
 import traceback
 from pathlib import Path
 
-# Ensure bare imports resolve from this file's directory
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -23,53 +24,340 @@ from v4_run import STORYLINE_LABELS, run_pipeline
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="V4 Transaction Analysis",
-    page_icon=":bar_chart:",
+    page_icon="\u2588",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar form
+# Theme CSS
 # ---------------------------------------------------------------------------
-st.sidebar.title("V4 Transaction Analysis")
-st.sidebar.markdown("Paste file paths below, select storylines, and click **Run**.")
+_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-with st.sidebar.form("run_form"):
-    txn_dir = st.text_input(
-        "Transaction File Directory",
-        help="Full path to the folder containing CSV or TXT transaction files",
-    )
-    file_ext = st.selectbox("File Type", ["csv", "txt"])
-    odd_path = st.text_input(
-        "ODD File Path",
-        help="Full path to the ODD Excel file (.xlsx)",
-    )
-    client_id = st.text_input("Client ID", value="0000")
-    client_name = st.text_input("Client Name", value="Client")
+:root {
+    --navy:    #2E4057;
+    --teal:    #048A81;
+    --amber:   #F18F01;
+    --green:   #2D936C;
+    --red:     #C73E1D;
+    --slate:   #8B95A2;
+    --surface: #111827;
+    --card:    #1F2937;
+    --border:  #374151;
+    --text:    #E5E7EB;
+    --muted:   #9CA3AF;
+}
 
-    st.markdown("---")
-    st.markdown("**Storylines to Run**")
-    selected: list[str] = []
-    for key, label in STORYLINE_LABELS.items():
-        if st.checkbox(label, value=True, key=f"cb_{key}"):
-            selected.append(key)
+/* Global */
+.stApp { background: var(--surface); }
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
-    submitted = st.form_submit_button("Run Analysis", type="primary")
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #0D1117;
+    border-right: 1px solid var(--border);
+}
+section[data-testid="stSidebar"] .stMarkdown h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.1rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--teal);
+    border-bottom: 2px solid var(--teal);
+    padding-bottom: 0.5rem;
+}
+section[data-testid="stSidebar"] label {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+}
+
+/* Metric cards */
+div[data-testid="stMetric"] {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+}
+div[data-testid="stMetric"] label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+}
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--teal);
+}
+
+/* Header bar */
+.header-bar {
+    background: linear-gradient(135deg, var(--navy) 0%, #1a2d42 100%);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem 2rem;
+    margin-bottom: 1.5rem;
+}
+.header-bar h1 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 0.25rem 0;
+    letter-spacing: 0.02em;
+}
+.header-bar .sub {
+    font-size: 0.85rem;
+    color: var(--slate);
+}
+.header-bar .client-tag {
+    display: inline-block;
+    background: var(--teal);
+    color: #fff;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+}
+
+/* Section cards */
+.section-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 0.75rem;
+}
+.section-card h4 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--teal);
+    margin: 0 0 0.5rem 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.section-card .narrative {
+    font-size: 0.9rem;
+    color: var(--text);
+    line-height: 1.6;
+}
+.section-card .narrative b, .section-card .narrative strong {
+    color: var(--amber);
+    font-weight: 600;
+}
+
+/* Status pill */
+.pill-ok {
+    display: inline-block;
+    background: rgba(45, 147, 108, 0.15);
+    color: var(--green);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+}
+.pill-err {
+    display: inline-block;
+    background: rgba(199, 62, 29, 0.15);
+    color: var(--red);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+}
+
+/* Download bar */
+.dl-bar {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.5rem;
+    margin-top: 1.5rem;
+}
+.dl-bar h4 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 0.75rem 0;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    background: var(--card);
+    border-radius: 6px 6px 0 0;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    padding: 0.25rem 0.5rem 0;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0.6rem 0.9rem;
+    border-radius: 4px 4px 0 0;
+}
+.stTabs [aria-selected="true"] {
+    background: var(--surface);
+    color: var(--teal);
+    border: 1px solid var(--border);
+    border-bottom: 2px solid var(--teal);
+}
+.stTabs [data-baseweb="tab-panel"] {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 1rem;
+    background: var(--surface);
+}
+
+/* Expander styling */
+.streamlit-expanderHeader {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--muted);
+}
+.empty-state .icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.3;
+}
+.empty-state h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1rem;
+    color: var(--slate);
+    margin-bottom: 0.5rem;
+}
+.empty-state p {
+    font-size: 0.85rem;
+    max-width: 400px;
+    margin: 0 auto;
+    line-height: 1.5;
+}
+
+/* Form submit button override */
+.stFormSubmitButton > button {
+    background: var(--teal) !important;
+    color: #fff !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+    border: none !important;
+    width: 100%;
+}
+.stFormSubmitButton > button:hover {
+    background: #069e94 !important;
+}
+
+/* Hide Streamlit branding */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+</style>
+"""
+
+st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags for plain-text contexts."""
+    return re.sub(r"<[^>]+>", "", text)
+
 
 # ---------------------------------------------------------------------------
-# Main area
+# Sidebar
 # ---------------------------------------------------------------------------
-st.title("V4 Transaction Analysis")
+with st.sidebar:
+    st.title("V4 WORKBENCH")
+
+    with st.form("run_form"):
+        st.markdown("##### DATA SOURCES")
+        txn_dir = st.text_input(
+            "Transaction directory",
+            value=st.session_state.get("last_txn_dir", ""),
+            help="Folder with CSV/TXT files (year subfolders OK)",
+            placeholder="/path/to/1453 - Connex",
+        )
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            odd_path = st.text_input(
+                "ODD file (.xlsx)",
+                value=st.session_state.get("last_odd_path", ""),
+                placeholder="/path/to/1453-ODD.xlsx",
+            )
+        with c2:
+            file_ext = st.selectbox("Type", ["csv", "txt"], label_visibility="visible")
+
+        st.markdown("##### CLIENT")
+        id_col, name_col = st.columns(2)
+        with id_col:
+            client_id = st.text_input("ID", value="0000")
+        with name_col:
+            client_name = st.text_input("Name", value="Client")
+
+        st.markdown("##### STORYLINES")
+        all_on = st.checkbox("Select all", value=True, key="select_all")
+        selected: list[str] = []
+        for key, label in STORYLINE_LABELS.items():
+            short = label.split(": ", 1)[-1] if ": " in label else label
+            tag = label.split(":")[0] if ":" in label else ""
+            if st.checkbox(f"`{tag}` {short}", value=all_on, key=f"cb_{key}"):
+                selected.append(key)
+
+        st.markdown("---")
+        submitted = st.form_submit_button("RUN ANALYSIS")
+
+# ---------------------------------------------------------------------------
+# Main area - Header
+# ---------------------------------------------------------------------------
+st.markdown(
+    '<div class="header-bar">'
+    '<h1>V4 Transaction Analysis</h1>'
+    '<span class="sub">Debit card portfolio analytics workbench</span>'
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 if not submitted:
-    st.info(
-        "Fill in file paths in the sidebar and click **Run Analysis** to begin. "
-        "All fields are required."
+    st.markdown(
+        '<div class="empty-state">'
+        '<div class="icon">///</div>'
+        "<h3>Ready to analyze</h3>"
+        "<p>Configure data sources and client info in the sidebar, "
+        "select your storylines, and hit RUN ANALYSIS.</p>"
+        "</div>",
+        unsafe_allow_html=True,
     )
     st.stop()
 
-# --- Pre-flight validation --------------------------------------------------
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 errors: list[str] = []
-
 if not txn_dir.strip():
     errors.append("Transaction directory is required.")
 elif not Path(txn_dir.strip()).exists():
@@ -90,44 +378,66 @@ if errors:
         st.error(e)
     st.stop()
 
-# --- Build config from base YAML + form overrides --------------------------
+# Remember paths for next run
+st.session_state["last_txn_dir"] = txn_dir.strip()
+st.session_state["last_odd_path"] = odd_path.strip()
+
+# ---------------------------------------------------------------------------
+# Build config
+# ---------------------------------------------------------------------------
 config_path = _HERE / "v4_config.yaml"
-if config_path.exists():
-    config = load_config(str(config_path))
-else:
-    config = {}
+config = load_config(str(config_path)) if config_path.exists() else {}
 
 config["transaction_dir"] = txn_dir.strip()
 config["file_extension"] = file_ext
 config["odd_file"] = odd_path.strip()
 config["client_id"] = client_id.strip()
 config["client_name"] = client_name.strip()
-config["output_dir"] = str(_HERE / "output" / f"{client_id.strip()}_{client_name.strip().replace(' ', '_')}")
+config["output_dir"] = str(
+    _HERE / "output" / f"{client_id.strip()}_{client_name.strip().replace(' ', '_')}"
+)
 
-# --- Run pipeline -----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Run pipeline
+# ---------------------------------------------------------------------------
 progress_bar = st.progress(0, text="Initializing...")
-status_container = st.status("Running analysis...", expanded=True)
+status_box = st.status("Running analysis...", expanded=True)
 
 
 def _progress(step: int, total: int, label: str) -> None:
     pct = step / total if total > 0 else 0
     progress_bar.progress(pct, text=label)
-    status_container.write(label)
+    status_box.write(f"`{label}`")
 
 
+t0 = time.time()
 try:
-    with status_container:
+    with status_box:
         results, excel_path, html_path = run_pipeline(
             config, storylines=selected, progress_cb=_progress,
         )
-    status_container.update(label="Analysis complete", state="complete")
+    elapsed = time.time() - t0
+    status_box.update(label=f"Complete in {elapsed:.1f}s", state="complete")
 except Exception:
-    status_container.update(label="Analysis failed", state="error")
-    st.error("An error occurred during analysis.")
+    status_box.update(label="Analysis failed", state="error")
+    st.error("Pipeline error -- see traceback below.")
     st.code(traceback.format_exc())
     st.stop()
 
-# --- Results summary --------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Client banner
+# ---------------------------------------------------------------------------
+st.markdown(
+    f'<div class="header-bar" style="padding:1rem 1.5rem;">'
+    f'<span class="client-tag">{client_id.strip()} - {client_name.strip()}</span>'
+    f'<span class="sub" style="margin-left:1rem;">{elapsed:.1f}s</span>'
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------------
+# Metrics row
+# ---------------------------------------------------------------------------
 total_sections = sum(len(r.get("sections", [])) for r in results.values())
 total_figures = sum(
     len(s.get("figures", []))
@@ -136,43 +446,94 @@ total_figures = sum(
 )
 total_sheets = sum(len(r.get("sheets", [])) for r in results.values())
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Storylines", len(results))
-col2.metric("Sections", total_sections)
-col3.metric("Charts", total_figures)
-col4.metric("Excel Sheets", total_sheets)
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Storylines", len(results))
+m2.metric("Sections", total_sections)
+m3.metric("Charts", total_figures)
+m4.metric("Sheets", total_sheets)
 
-# --- Per-storyline status ---------------------------------------------------
-st.markdown("### Storyline Results")
-for key, result in results.items():
-    label = STORYLINE_LABELS.get(key, key)
-    n_sec = len(result.get("sections", []))
-    desc = result.get("description", "")
-    if "Error:" in desc:
-        st.error(f"**{label}** -- {desc}")
-    else:
-        st.success(f"**{label}** -- {n_sec} sections")
+# ---------------------------------------------------------------------------
+# Tabbed results viewer
+# ---------------------------------------------------------------------------
+if results:
+    tab_labels = []
+    tab_keys = []
+    for key in results:
+        label = STORYLINE_LABELS.get(key, key)
+        short = label.split(":")[0] if ":" in label else label
+        tab_labels.append(short)
+        tab_keys.append(key)
 
-# --- Download buttons -------------------------------------------------------
-st.markdown("### Download Reports")
-dl_col1, dl_col2 = st.columns(2)
+    tabs = st.tabs(tab_labels)
+
+    for tab, key in zip(tabs, tab_keys):
+        result = results[key]
+        label = STORYLINE_LABELS.get(key, key)
+        sections = result.get("sections", [])
+        desc = result.get("description", "")
+
+        with tab:
+            # Status pill
+            if "Error:" in desc:
+                st.markdown(f'<span class="pill-err">ERROR</span> {desc}', unsafe_allow_html=True)
+                continue
+
+            st.markdown(
+                f'<span class="pill-ok">OK</span> '
+                f'<span style="color:var(--muted);font-size:0.8rem;">'
+                f'{len(sections)} sections</span>',
+                unsafe_allow_html=True,
+            )
+
+            for section in sections:
+                heading = section.get("heading", "")
+                narrative = section.get("narrative", "")
+                figures = section.get("figures", [])
+                tables = section.get("tables", [])
+
+                st.markdown(
+                    f'<div class="section-card">'
+                    f"<h4>{heading}</h4>"
+                    f'<div class="narrative">{narrative}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                for fig in figures:
+                    st.plotly_chart(fig, use_container_width=True, key=f"{key}_{heading}_{id(fig)}")
+
+                for tbl_title, tbl_df in tables:
+                    with st.expander(f"Table: {tbl_title}"):
+                        st.dataframe(tbl_df, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Download bar
+# ---------------------------------------------------------------------------
+st.markdown(
+    '<div class="dl-bar"><h4>Export Deliverables</h4></div>',
+    unsafe_allow_html=True,
+)
+
+dl1, dl2, dl3 = st.columns(3)
 
 if excel_path.exists():
     with open(excel_path, "rb") as f:
-        dl_col1.download_button(
-            label="Download Excel Report",
+        dl1.download_button(
+            "Excel Workbook",
             data=f.read(),
             file_name=excel_path.name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
         )
 
 if html_path.exists():
     with open(html_path, "rb") as f:
-        dl_col2.download_button(
-            label="Download HTML Dashboard",
+        dl2.download_button(
+            "HTML Dashboard",
             data=f.read(),
             file_name=html_path.name,
             mime="text/html",
+            use_container_width=True,
         )
 
-st.caption(f"Output saved to `{config['output_dir']}`")
+dl3.caption(f"Saved to `{config['output_dir']}`")
